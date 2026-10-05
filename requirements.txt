@@ -1,1 +1,10 @@
+numpy
+pandas
+scipy
+scikit-learn
+matplotlib
 streamlit
+fastapi
+uvicorn[standard]
+websockets
+plotly
