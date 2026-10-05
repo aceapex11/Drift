@@ -1,0 +1,4 @@
+,stable,data_drift,relational_drift,both,overall,train+predict seconds
+Static (no adaptation),2.566,4.699,10.668,11.768,6.688,1.59
+Full retrain (recent buffer),4.058,4.29,7.068,8.487,5.744,72.497
+Transfer learning (fine-tune),4.103,4.836,6.23,7.907,5.585,25.963
