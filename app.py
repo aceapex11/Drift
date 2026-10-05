@@ -1,4 +1,3 @@
-
 """
 Streamlit frontend for the existing live drift-detection project.
 
@@ -37,19 +36,19 @@ st.set_page_config(
 )
 
 COLORS = {
-    "bg": "#0B1220",
-    "panel": "#111D30",
-    "grid": "#27384F",
-    "text": "#E8EEF7",
-    "muted": "#94A3B8",
-    "static": "#94A3B8",
-    "transfer": "#22C55E",
-    "data": "#38BDF8",
-    "relational": "#A78BFA",
-    "alarm": "#F59E0B",
-    "truth": "#FB7185",
-    "adapt": "#2DD4BF",
-    "danger": "#EF4444",
+    "bg": "#F5F7FB",
+    "panel": "#FFFFFF",
+    "grid": "#D9E1EC",
+    "text": "#172033",
+    "muted": "#64748B",
+    "static": "#64748B",
+    "transfer": "#16A34A",
+    "data": "#0284C7",
+    "relational": "#7C3AED",
+    "alarm": "#D97706",
+    "truth": "#E11D48",
+    "adapt": "#0F766E",
+    "danger": "#DC2626",
 }
 
 st.markdown(
@@ -61,13 +60,25 @@ st.markdown(
         }}
 
         [data-testid="stSidebar"] {{
-            background: #0F1A2B;
-            border-right: 1px solid #24344B;
+            background: #FFFFFF;
+            border-right: 1px solid #D9E1EC;
+        }}
+
+        [data-testid="stSidebar"] * {{
+            color: {COLORS["text"]};
+        }}
+
+        [data-testid="stHeader"] {{
+            background: #FFFFFF;
+        }}
+
+        [data-testid="stToolbar"] {{
+            background: #FFFFFF;
         }}
 
         [data-testid="stMetric"] {{
             background: {COLORS["panel"]};
-            border: 1px solid #30445F;
+            border: 1px solid #D9E1EC;
             border-radius: 14px;
             padding: 14px 16px;
         }}
@@ -137,7 +148,7 @@ def make_fig(title, y_title=None, height=370):
     fig = go.Figure()
     fig.update_layout(
         title=dict(text=title, x=0.01, xanchor="left"),
-        template="plotly_dark",
+        template="plotly_white",
         paper_bgcolor=COLORS["panel"],
         plot_bgcolor=COLORS["panel"],
         font=dict(color=COLORS["text"]),
@@ -302,7 +313,7 @@ with st.sidebar:
     start = st.button(
         "▶ Start / restart live stream",
         type="primary",
-        use_container_width=True,
+        width="stretch",
     )
 
     st.divider()
@@ -489,8 +500,7 @@ def render_dashboard():
 
     live_mae_slot.plotly_chart(
         fig,
-        use_container_width=True,
-        key="live_mae_chart",
+        width="stretch",
     )
 
     # --------------------------------------------------------
@@ -534,8 +544,7 @@ def render_dashboard():
 
         prediction_slot.plotly_chart(
             add_event_lines(fig, events, show_truth),
-            use_container_width=True,
-            key="actual_prediction_chart",
+            width="stretch",
         )
 
     else:
@@ -576,7 +585,7 @@ def render_dashboard():
 
         fig.update_layout(
             title="Sensor-level KS statistic",
-            template="plotly_dark",
+            template="plotly_white",
             paper_bgcolor=COLORS["panel"],
             plot_bgcolor=COLORS["panel"],
             font=dict(color=COLORS["text"]),
@@ -590,8 +599,7 @@ def render_dashboard():
 
         sensor_slot.plotly_chart(
             fig,
-            use_container_width=True,
-            key="sensor_ks_chart",
+            width="stretch",
         )
 
     # --------------------------------------------------------
@@ -622,7 +630,7 @@ def render_dashboard():
 
     fig.update_layout(
         title="Data-drift and relational-drift signals",
-        template="plotly_dark",
+        template="plotly_white",
         paper_bgcolor=COLORS["panel"],
         plot_bgcolor=COLORS["panel"],
         font=dict(color=COLORS["text"]),
@@ -651,8 +659,7 @@ def render_dashboard():
 
     signal_slot.plotly_chart(
         add_event_lines(fig, events, show_truth),
-        use_container_width=True,
-        key="drift_signal_chart",
+        width="stretch",
     )
 
     # --------------------------------------------------------
@@ -718,8 +725,7 @@ def render_dashboard():
 
     timeline_slot.plotly_chart(
         fig,
-        use_container_width=True,
-        key="drift_timeline",
+        width="stretch",
     )
 
 
@@ -753,8 +759,7 @@ def render_dashboard():
 
     rolling_slot.plotly_chart(
         add_event_lines(fig, events, show_truth),
-        use_container_width=True,
-        key="model_performance_mae",
+        width="stretch",
     )
 
     # --------------------------------------------------------
@@ -791,13 +796,13 @@ def render_dashboard():
         if shown:
             summary_slot.dataframe(
                 comparison[shown],
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
         else:
             summary_slot.dataframe(
                 comparison,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
 
@@ -841,7 +846,7 @@ def render_dashboard():
                 fig.update_layout(
                     title="Classification performance",
                     barmode="group",
-                    template="plotly_dark",
+                    template="plotly_white",
                     paper_bgcolor=COLORS["panel"],
                     plot_bgcolor=COLORS["panel"],
                     font=dict(color=COLORS["text"]),
@@ -859,8 +864,7 @@ def render_dashboard():
 
                 summary_slot.plotly_chart(
                     fig,
-                    use_container_width=True,
-                    key="classification_metrics",
+                    width="stretch",
                 )
 
     else:
@@ -907,8 +911,7 @@ def render_dashboard():
 
     recovery_slot.plotly_chart(
         add_event_lines(fig, events, show_truth),
-        use_container_width=True,
-        key="recovery_chart",
+        width="stretch",
     )
 
     alarms = [
@@ -1003,7 +1006,7 @@ def render_dashboard():
                 if c in d.columns
             ]
         ].tail(100),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
@@ -1046,7 +1049,7 @@ def render_dashboard():
     if not log.empty:
         log_slot.dataframe(
             log.sort_values("Window", ascending=False).head(250),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
