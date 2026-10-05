@@ -495,7 +495,10 @@ class SGDStreamEngine:
         }
 
     def _adapt(self, Xb, yb, alarm, recovery):
-        if alarm or recovery:
+        # A NEW drift alarm starts one adaptation cycle.
+        # Recovery only marks the end of the drift episode; it does not
+        # start another adaptation cycle.
+        if alarm:
             self.active = ADAPT_WINDOWS
 
         adapted = False
