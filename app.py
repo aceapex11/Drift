@@ -21,7 +21,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from data_generator import generate, TRAIN_END, WINDOW
-from drift_engine import DualRunner
+from drift_engine import StrategyRunner
 
 
 # ============================================================
@@ -336,6 +336,15 @@ if "history" not in st.session_state:
 
 if "events" not in st.session_state:
     st.session_state.events = []
+
+if "live_runner" not in st.session_state:
+    st.session_state.live_runner = None
+
+if "stream_df" not in st.session_state:
+    st.session_state.stream_df = None
+
+if "stream_index" not in st.session_state:
+    st.session_state.stream_index = 0
 
 if start:
     st.session_state.history = []
@@ -916,94 +925,355 @@ with tabs[5]:
 # ============================================================
 # LIVE STREAM EXECUTION
 # ============================================================
+# ============================================================
+# LIVE STREAM EXECUTION
+# ============================================================
+#
+# Streamlit reruns the script from top to bottom after every interaction.
+# For a real live dashboard, process ONE window per rerun and keep the
+# runner/history in session_state. This lets the browser receive the
+# updated charts after every window.
+
+if "stream_running" not in st.session_state:
+    st.session_state.stream_running = False
+
+if "stream_finished" not in st.session_state:
+    st.session_state.stream_finished = False
 
 if start:
+    with st.spinner(
+        "Generating the synthetic stream and initializing "
+        "incremental/continual learners..."
+    ):
+        st.session_state.stream_df = load_data()
 
-    with st.spinner("Generating the stream and starting incremental learning…"):
-        df = load_data()
-
-    runner = DualRunner(
-        df,
+    st.session_state.live_runner = StrategyRunner(
+        st.session_state.stream_df,
         TRAIN_END,
         WINDOW,
         seed=0,
+        strategies=[
+            "Static",
+            "Incremental",
+            "Continual + replay(100)",
+            "Continual + replay(500)",
+        ],
     )
 
     st.session_state.history = []
     st.session_state.events = []
+    st.session_state.stream_index = 0
+    st.session_state.stream_running = True
+    st.session_state.stream_finished = False
 
-    live_tab = tabs[0]
+    st.rerun()
 
-    progress = st.progress(0.0)
 
-    windows = [
-        (s, min(s + WINDOW, len(df)))
-        for s in range(
-            TRAIN_END,
-            len(df),
-            WINDOW,
-        )
-    ]
+# ------------------------------------------------------------
+# PROCESS EXACTLY ONE WINDOW PER SCRIPT RUN
+# ------------------------------------------------------------
 
-    total = len(windows)
+if st.session_state.stream_running:
 
-    # Ground-truth events are only created for visualization.
-    truth_events = build_truth_events(df)
+    runner = st.session_state.live_runner
+    stream_df = st.session_state.stream_df
+    windows = runner.windows
+    i = st.session_state.stream_index
 
-    for i, (s, e) in enumerate(windows):
+    if i < len(windows):
 
-        row = runner.step(s, e)
+        s, e = windows[i]
 
-        st.session_state.history.append(row)
+        batch = runner.step(s, e)
 
-        if row["alarm"]:
+        primary = batch["Incremental"]
+
+        # Save every learning strategy.
+        for strategy_name, row in batch.items():
+            saved_row = dict(row)
+            saved_row["strategy"] = strategy_name
+            st.session_state.history.append(saved_row)
+
+        # Detector/adaptation events are based on the Incremental stream.
+        if primary.get("alarm"):
             st.session_state.events.append(
                 {
-                    "window": int(row["window"]),
+                    "window": int(primary["window"]),
                     "type": "alarm",
-                    "diagnosis": row["diagnosis"],
+                    "diagnosis": str(
+                        primary.get("diagnosis", "")
+                    ),
                 }
             )
 
-        if row["adapted"]:
+        if primary.get("adapted"):
             st.session_state.events.append(
                 {
-                    "window": int(row["window"]),
+                    "window": int(primary["window"]),
                     "type": "adapt",
-                    "diagnosis": row["diagnosis"],
+                    "diagnosis": str(
+                        primary.get("diagnosis", "")
+                    ),
                 }
             )
 
         if show_truth:
-            existing_truth = {
-                x["window"]
-                for x in st.session_state.events
-                if x["type"] == "truth"
-            }
+            truth_events_now = build_truth_events(stream_df)
 
-            for event in truth_events:
-                if (
-                    event["window"] == row["window"]
-                    and event["window"] not in existing_truth
-                ):
-                    st.session_state.events.append(event)
+            for event in truth_events_now:
+                if event["window"] == primary["window"]:
+                    if not any(
+                        x["type"] == "truth"
+                        and x["window"] == event["window"]
+                        for x in st.session_state.events
+                    ):
+                        st.session_state.events.append(event)
 
-        # Update progress only.
-        progress.progress(
-            min(
-                1.0,
-                (i + 1) / max(1, total),
-            )
-        )
+        st.session_state.stream_index += 1
 
-        if delay:
-            time.sleep(delay)
+        # If this was the final window, stop after displaying it.
+        if st.session_state.stream_index >= len(windows):
+            st.session_state.stream_running = False
+            st.session_state.stream_finished = True
 
-    progress.empty()
 
-    st.success(
-        f"Stream completed: {total} windows processed."
+# ------------------------------------------------------------
+# RENDER THE CURRENT LIVE STATE
+# ------------------------------------------------------------
+
+if st.session_state.history:
+
+    history = pd.DataFrame(
+        st.session_state.history
     )
 
-    # Force Streamlit to display the completed history on rerun.
-    st.rerun()
+    primary_history = history[
+        history["strategy"] == "Incremental"
+    ].copy()
+
+    latest = primary_history.iloc[-1]
+
+    # Current metrics.
+    current_rows = {
+        strategy: history[
+            history["strategy"] == strategy
+        ].iloc[-1]
+        for strategy in [
+            "Static",
+            "Incremental",
+            "Continual + replay(100)",
+            "Continual + replay(500)",
+        ]
+        if not history[
+            history["strategy"] == strategy
+        ].empty
+    }
+
+    metric_cols = st.columns(6)
+
+    metric_cols[0].metric(
+        "CURRENT WINDOW",
+        int(latest["window"]) + 1,
+    )
+
+    metric_cols[1].metric(
+        "DIAGNOSIS",
+        str(latest["diagnosis"]).upper(),
+    )
+
+    metric_cols[2].metric(
+        "INCREMENTAL MAE",
+        f"{current_rows['Incremental']['mae']:.3f}",
+    )
+
+    metric_cols[3].metric(
+        "REPLAY 100 MAE",
+        f"{current_rows['Continual + replay(100)']['mae']:.3f}",
+    )
+
+    metric_cols[4].metric(
+        "REPLAY 500 MAE",
+        f"{current_rows['Continual + replay(500)']['mae']:.3f}",
+    )
+
+    metric_cols[5].metric(
+        "INCREMENTAL R²",
+        f"{current_rows['Incremental']['r2']:.3f}",
+    )
+
+    # --------------------------------------------------------
+    # CHART 1: LEARNING BEHAVIOUR
+    # --------------------------------------------------------
+
+    model_fig = make_fig(
+        "Live learning behaviour",
+        "MAE",
+        430,
+    )
+
+    chart_specs = [
+        (
+            "Static",
+            "Static — no adaptation",
+            COLORS["static"],
+            2.5,
+        ),
+        (
+            "Incremental",
+            "Incremental SGD",
+            COLORS["incremental"],
+            3,
+        ),
+        (
+            "Continual + replay(100)",
+            "Continual + Replay 100",
+            "#2563EB",
+            2.5,
+        ),
+        (
+            "Continual + replay(500)",
+            "Continual + Replay 500",
+            "#9333EA",
+            2.5,
+        ),
+    ]
+
+    for strategy, label, color, width in chart_specs:
+
+        h = history[
+            history["strategy"] == strategy
+        ]
+
+        if not h.empty:
+            model_fig.add_trace(
+                go.Scatter(
+                    x=h["window"],
+                    y=h["mae"],
+                    mode="lines+markers",
+                    name=label,
+                    line=dict(
+                        color=color,
+                        width=width,
+                    ),
+                    marker=dict(size=4),
+                )
+            )
+
+    model_fig = add_event_lines(
+        model_fig,
+        st.session_state.events,
+        show_truth,
+    )
+
+    st.plotly_chart(
+        model_fig,
+        width="stretch",
+        key=f"live_model_chart_{len(history)}",
+    )
+
+    # --------------------------------------------------------
+    # CHART 2: DRIFT DETECTION
+    # --------------------------------------------------------
+
+    drift_fig = make_fig(
+        "Live drift detection",
+        "Signal",
+        400,
+    )
+
+    drift_fig.add_trace(
+        go.Scatter(
+            x=primary_history["window"],
+            y=primary_history["worst_ks"],
+            mode="lines+markers",
+            name="Worst KS",
+            line=dict(
+                color=COLORS["data"],
+                width=2.5,
+            ),
+            marker=dict(size=3),
+        )
+    )
+
+    drift_fig.add_trace(
+        go.Scatter(
+            x=primary_history["window"],
+            y=primary_history["worst_psi"],
+            mode="lines+markers",
+            name="Worst PSI",
+            line=dict(
+                color=COLORS["relational"],
+                width=2.5,
+            ),
+            marker=dict(size=3),
+        )
+    )
+
+    drift_fig.add_trace(
+        go.Scatter(
+            x=primary_history["window"],
+            y=primary_history["ph_stat"],
+            mode="lines+markers",
+            name="Page-Hinkley",
+            line=dict(
+                color=COLORS["alarm"],
+                width=2.5,
+            ),
+            marker=dict(size=3),
+        )
+    )
+
+    st.plotly_chart(
+        drift_fig,
+        width="stretch",
+        key=f"live_drift_chart_{len(history)}",
+    )
+
+    # --------------------------------------------------------
+    # LIVE STATUS
+    # --------------------------------------------------------
+
+    total_windows = (
+        len(st.session_state.live_runner.windows)
+        if st.session_state.live_runner is not None
+        else 0
+    )
+
+    if st.session_state.stream_running:
+
+        progress = (
+            st.session_state.stream_index
+            / max(1, total_windows)
+        )
+
+        st.progress(
+            progress,
+            text=(
+                f"Live window "
+                f"{st.session_state.stream_index}/{total_windows} "
+                f"• {str(latest['diagnosis']).upper()} "
+                f"• Alarm: "
+                f"{'YES' if latest['alarm'] else 'NO'} "
+                f"• Adapted: "
+                f"{'YES' if latest['adapted'] else 'NO'}"
+            ),
+        )
+
+        # Wait a little, then trigger the next window. The browser has
+        # already rendered the current charts before the next rerun.
+        time.sleep(max(0.05, float(delay)))
+        st.rerun()
+
+    elif st.session_state.stream_finished:
+
+        st.success(
+            f"✓ Live stream completed — "
+            f"{total_windows} windows processed."
+        )
+
+elif not st.session_state.stream_running:
+
+    st.info(
+        "Click **Start / restart live stream** to begin. "
+        "The charts will update window-by-window like a live monitor."
+    )
