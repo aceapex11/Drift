@@ -321,9 +321,9 @@ with st.sidebar:
     st.divider()
 
     st.caption(
-        "Static and incremental SGD are compared live. "
-        "Full retraining and replay strategies are evaluated by "
-        "`run_experiment.py`."
+        "Static, Incremental SGD, and Continual Learning "
+        "with Replay(100/500) are compared live. "
+        "Full retraining remains in `run_experiment.py`."
     )
 
 
@@ -373,108 +373,212 @@ tabs = st.tabs(
 
 with tabs[0]:
 
-    metric_cols = st.columns(6)
-    metric_slots = [c.empty() for c in metric_cols]
-
     st.markdown(
         '<div class="section-title">Live model behaviour</div>',
         unsafe_allow_html=True,
     )
 
-    live_chart_slot = st.empty()
+    # The live runner stores one row per strategy:
+    # Static, Incremental, Replay(100), Replay(500).
+    # Therefore do NOT expect a `mae_static` column in every row.
+    history = pd.DataFrame(
+        st.session_state.history
+    )
 
-    if not st.session_state.history:
+    if history.empty:
+
         st.info(
-            "Click **Start / restart live stream** to run the "
-            "incremental-learning stream. The dashboard loads immediately; "
-            "the synthetic data is generated only when you start the stream."
+            "Click **Start / restart live stream** to begin. "
+            "The charts will update window-by-window."
         )
 
-    elif st.session_state.history:
+    else:
 
-        history = pd.DataFrame(
-            st.session_state.history
-        )
+        incremental = history[
+            history["strategy"] == "Incremental"
+        ].copy()
 
-        last = history.iloc[-1]
+        static = history[
+            history["strategy"] == "Static"
+        ].copy()
 
-        metric_slots[0].metric(
-            "CURRENT WINDOW",
-            int(last["window"]) + 1,
-        )
+        replay100 = history[
+            history["strategy"] == "Continual + replay(100)"
+        ].copy()
 
-        metric_slots[1].metric(
-            "DIAGNOSIS",
-            str(last["diagnosis"]).upper(),
-        )
+        replay500 = history[
+            history["strategy"] == "Continual + replay(500)"
+        ].copy()
 
-        metric_slots[2].metric(
-            "STATIC MAE",
-            f"{last['mae_static']:.3f}",
-        )
+        if not incremental.empty:
 
-        metric_slots[3].metric(
-            "INCREMENTAL MAE",
-            f"{last['mae']:.3f}",
-            f"{last['mae'] - last['mae_static']:+.3f} vs static",
-            delta_color="inverse",
-        )
+            last = incremental.iloc[-1]
 
-        metric_slots[4].metric(
-            "RMSE",
-            f"{last['rmse']:.3f}",
-        )
+            metric_cols = st.columns(6)
 
-        metric_slots[5].metric(
-            "R²",
-            f"{last['r2']:.3f}",
-        )
-
-        fig = make_fig(
-            "Model error · lower is better",
-            "MAE",
-            400,
-        )
-
-        fig.add_trace(
-            go.Scatter(
-                x=history["window"],
-                y=history["mae_static"],
-                mode="lines+markers",
-                name="Static — no adaptation",
-                line=dict(
-                    color=COLORS["static"],
-                    width=2.5,
-                ),
-                marker=dict(size=4),
+            metric_cols[0].metric(
+                "CURRENT WINDOW",
+                int(last["window"]) + 1,
             )
-        )
 
-        fig.add_trace(
-            go.Scatter(
-                x=history["window"],
-                y=history["mae"],
-                mode="lines+markers",
-                name="Incremental SGD",
-                line=dict(
-                    color=COLORS["incremental"],
-                    width=3,
-                ),
-                marker=dict(size=4),
+            metric_cols[1].metric(
+                "DIAGNOSIS",
+                str(last["diagnosis"]).upper(),
             )
-        )
 
-        fig = add_event_lines(
-            fig,
-            st.session_state.events,
-            show_truth,
-        )
+            metric_cols[2].metric(
+                "INCREMENTAL MAE",
+                f"{last['mae']:.3f}",
+            )
 
-        live_chart_slot.plotly_chart(
-            fig,
-            width="stretch",
-        )
+            metric_cols[3].metric(
+                "REPLAY 100 MAE",
+                f"{replay100.iloc[-1]['mae']:.3f}"
+                if not replay100.empty
+                else "—",
+            )
 
+            metric_cols[4].metric(
+                "REPLAY 500 MAE",
+                f"{replay500.iloc[-1]['mae']:.3f}"
+                if not replay500.empty
+                else "—",
+            )
+
+            metric_cols[5].metric(
+                "INCREMENTAL R²",
+                f"{last['r2']:.3f}",
+            )
+
+            # Live learning chart.
+            fig = make_fig(
+                "Live learning behaviour",
+                "MAE",
+                420,
+            )
+
+            if not static.empty:
+                fig.add_trace(
+                    go.Scatter(
+                        x=static["window"],
+                        y=static["mae"],
+                        mode="lines+markers",
+                        name="Static — no adaptation",
+                        line=dict(
+                            color=COLORS["static"],
+                            width=2.5,
+                        ),
+                        marker=dict(size=3),
+                    )
+                )
+
+            fig.add_trace(
+                go.Scatter(
+                    x=incremental["window"],
+                    y=incremental["mae"],
+                    mode="lines+markers",
+                    name="Incremental SGD",
+                    line=dict(
+                        color=COLORS["incremental"],
+                        width=3,
+                    ),
+                    marker=dict(size=3),
+                )
+            )
+
+            if not replay100.empty:
+                fig.add_trace(
+                    go.Scatter(
+                        x=replay100["window"],
+                        y=replay100["mae"],
+                        mode="lines+markers",
+                        name="Continual + Replay 100",
+                        line=dict(
+                            color="#2563EB",
+                            width=2.5,
+                        ),
+                        marker=dict(size=3),
+                    )
+                )
+
+            if not replay500.empty:
+                fig.add_trace(
+                    go.Scatter(
+                        x=replay500["window"],
+                        y=replay500["mae"],
+                        mode="lines+markers",
+                        name="Continual + Replay 500",
+                        line=dict(
+                            color="#9333EA",
+                            width=2.5,
+                        ),
+                        marker=dict(size=3),
+                    )
+                )
+
+            fig = add_event_lines(
+                fig,
+                st.session_state.events,
+                show_truth,
+            )
+
+            st.plotly_chart(
+                fig,
+                width="stretch",
+                key=f"top_live_model_{len(history)}",
+            )
+
+            # Live detector chart.
+            drift_fig = make_fig(
+                "Live drift detection",
+                "Signal",
+                380,
+            )
+
+            drift_fig.add_trace(
+                go.Scatter(
+                    x=incremental["window"],
+                    y=incremental["worst_ks"],
+                    mode="lines",
+                    name="Worst KS",
+                    line=dict(
+                        color=COLORS["data"],
+                        width=2.5,
+                    ),
+                )
+            )
+
+            drift_fig.add_trace(
+                go.Scatter(
+                    x=incremental["window"],
+                    y=incremental["worst_psi"],
+                    mode="lines",
+                    name="Worst PSI",
+                    line=dict(
+                        color=COLORS["relational"],
+                        width=2.5,
+                    ),
+                )
+            )
+
+            drift_fig.add_trace(
+                go.Scatter(
+                    x=incremental["window"],
+                    y=incremental["ph_stat"],
+                    mode="lines",
+                    name="Page-Hinkley",
+                    line=dict(
+                        color=COLORS["alarm"],
+                        width=2.5,
+                    ),
+                )
+            )
+
+            st.plotly_chart(
+                drift_fig,
+                width="stretch",
+                key=f"top_live_drift_{len(history)}",
+            )
 
 # ============================================================
 # DRIFT ANALYSIS
