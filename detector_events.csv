@@ -1,7 +1,0 @@
-event,true_type,mode,true_window,alarm_window,delay_windows,diagnosed_at_alarm,n_alarms_in_event
-1,data,sudden,6,6,0,data,1
-2,relational,sudden,18,18,0,relational,1
-3,both,gradual,30,31,1,data,2
-4,relational,sudden,42,42,0,relational,1
-5,data,sudden,51,51,0,data,1
-6,both,sudden,64,64,0,both,1
