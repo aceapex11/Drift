@@ -422,6 +422,7 @@ def render_dashboard():
 
     events = st.session_state.events
     last = st.session_state.history[-1]
+    render_id = int(last.get("window", len(st.session_state.history) - 1))
 
     # --------------------------------------------------------
     # TOP KPIs
@@ -501,6 +502,7 @@ def render_dashboard():
     live_mae_slot.plotly_chart(
         fig,
         width="stretch",
+        key=f"live_mae_chart_{render_id}",
     )
 
     # --------------------------------------------------------
@@ -529,7 +531,7 @@ def render_dashboard():
                 x=d["window"],
                 y=d[actual_col],
                 name="Actual",
-                line=dict(color="#F8FAFC", width=2.5),
+                line=dict(color=COLORS["text"], width=2.5),
             )
         )
 
@@ -545,6 +547,7 @@ def render_dashboard():
         prediction_slot.plotly_chart(
             add_event_lines(fig, events, show_truth),
             width="stretch",
+            key=f"prediction_chart_{render_id}",
         )
 
     else:
@@ -600,6 +603,7 @@ def render_dashboard():
         sensor_slot.plotly_chart(
             fig,
             width="stretch",
+            key=f"sensor_ks_chart_{render_id}",
         )
 
     # --------------------------------------------------------
@@ -660,6 +664,7 @@ def render_dashboard():
     signal_slot.plotly_chart(
         add_event_lines(fig, events, show_truth),
         width="stretch",
+        key=f"drift_signal_chart_{render_id}",
     )
 
     # --------------------------------------------------------
@@ -726,6 +731,7 @@ def render_dashboard():
     timeline_slot.plotly_chart(
         fig,
         width="stretch",
+        key=f"timeline_chart_{render_id}",
     )
 
 
@@ -760,6 +766,7 @@ def render_dashboard():
     rolling_slot.plotly_chart(
         add_event_lines(fig, events, show_truth),
         width="stretch",
+        key=f"rolling_mae_chart_{render_id}",
     )
 
     # --------------------------------------------------------
@@ -865,6 +872,7 @@ def render_dashboard():
                 summary_slot.plotly_chart(
                     fig,
                     width="stretch",
+                    key=f"classification_summary_{render_id}",
                 )
 
     else:
@@ -912,6 +920,7 @@ def render_dashboard():
     recovery_slot.plotly_chart(
         add_event_lines(fig, events, show_truth),
         width="stretch",
+        key=f"recovery_chart_{render_id}",
     )
 
     alarms = [
@@ -1135,8 +1144,8 @@ if start:
                 }
             )
 
-        # Redraw every few windows rather than on every observation.
-        if i % 3 == 0 or i == len(windows) - 1:
+        # Redraw every window so the dashboard is genuinely live.
+        if True:
             render_dashboard()
 
             progress.progress(
