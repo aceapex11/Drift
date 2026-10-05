@@ -1,6 +1,5 @@
 """
 Streamlit frontend for the existing live drift-detection project.
-
 Run:
     streamlit run app.py
 
