@@ -1,12 +1,11 @@
 """
 Streamlit dashboard.   Run:  streamlit run app.py
-Two sources:  (1) Embedded engine  - everything in this one process (use this on Streamlit Community Cloud)
-              (2) FastAPI server   - connects to  uvicorn stream_server:app  over a WebSocket (local use only)
+Everything (data, detectors, transfer-learning model) runs inside this one process.
 """
-import json, time
+import time
 import pandas as pd
 import streamlit as st
-from data_generator import generate, TRAIN_END, WINDOW, TARGET
+from data_generator import generate, TRAIN_END, WINDOW
 from drift_engine import DualRunner, StreamEngine, TransferGBR, make_windows
 
 st.set_page_config(page_title="Live drift detection", layout="wide")
@@ -21,40 +20,7 @@ def load_assets():
     return df, pretrained
 
 
-def embedded_stream(delay):
-    df, pretrained = load_assets()
-    runner = DualRunner(df, TRAIN_END, WINDOW, pretrained)
-    wins = make_windows(len(df), TRAIN_END, WINDOW)
-    yield {"type": "ready", "ks_thr": runner.ks_thr, "reference_mae": runner.reference_mae, "n_windows": len(wins)}
-    for s, e in wins:
-        out = runner.step(s, e)
-        out["type"] = "window"
-        out["truth_regime"] = df.regime.iloc[s]      # answer key, only used for the demo log
-        yield out
-        time.sleep(delay)
-    yield {"type": "done"}
-
-
-def server_stream(url, delay):
-    from websockets.sync.client import connect          # pip install websockets
-    try:
-        with connect(f"{url}?delay={delay}", max_size=None, open_timeout=5) as ws:
-            for msg in ws:
-                m = json.loads(msg)
-                yield m
-                if m["type"] == "done":
-                    return
-    except OSError:
-        st.error(f"Can't reach the FastAPI server at {url}. On Streamlit Cloud, use the 'Embedded engine' source. "
-                 "Server mode only works when `uvicorn stream_server:app --port 8000` is running and reachable.")
-        st.stop()
-
-
 with st.sidebar:
-    source = st.radio("Data source", ["Embedded engine", "FastAPI server"], index=0)
-    url = st.text_input("WebSocket URL", "ws://localhost:8000/ws") if source == "FastAPI server" else None
-    if source == "FastAPI server":
-        st.warning("Server mode works only if uvicorn is running locally. On Streamlit Cloud use 'Embedded engine'.")
     delay = st.slider("Seconds per window", 0.0, 2.0, 0.3, 0.1)
     start = st.button("Start live stream", type="primary")
     show_truth = st.checkbox("Show true regime in alarm log (answer key, demo only)", True)
@@ -66,16 +32,16 @@ left, right = st.columns(2)
 ks_box, log_box = left.empty(), right.empty()
 
 if start:
+    df, pretrained = load_assets()
+    runner = DualRunner(df, TRAIN_END, WINDOW, pretrained)
     rows, alarms = [], []
-    stream = embedded_stream(delay) if source == "Embedded engine" else server_stream(url, delay)
-    for msg in stream:
-        if msg["type"] == "ready":
-            continue
-        if msg["type"] == "done":
-            st.success("Stream finished.")
-            break
+
+    for s, e in make_windows(len(df), TRAIN_END, WINDOW):
+        msg = runner.step(s, e)
+        msg["truth_regime"] = df.regime.iloc[s]      # answer key, only used for the demo log
         rows.append(msg)
         d = pd.DataFrame(rows).set_index("window")
+
         box[0].metric("Window", f'{msg["window"] + 1}')
         box[1].metric("Diagnosis", msg["diagnosis"].upper())
         box[2].metric("Static model MAE", f'{msg["mae_static"]:.2f}')
@@ -83,8 +49,9 @@ if start:
                       f'{msg["mae"] - msg["mae_static"]:+.2f} vs static', delta_color="inverse")
         box[4].metric("Model trees", msg.get("n_trees", "-"))
 
-        plot = d[["mae_static", "mae"]].rename(columns={"mae_static": "Static (no adaptation)", "mae": "Transfer learning"})
-        chart_mae.line_chart(plot, height=260)
+        chart_mae.line_chart(
+            d[["mae_static", "mae"]].rename(columns={"mae_static": "Static (no adaptation)", "mae": "Transfer learning"}),
+            height=260)
         chart_sig.line_chart(
             d[["worst_ks", "mean_resid"]].rename(columns={
                 "worst_ks": "worst KS (data)",
@@ -102,5 +69,8 @@ if start:
             })
         if alarms:
             log_box.dataframe(pd.DataFrame(alarms), hide_index=True)
+        time.sleep(delay)
+
+    st.success("Stream finished.")
 else:
     st.info("Press **Start live stream** in the sidebar.")
