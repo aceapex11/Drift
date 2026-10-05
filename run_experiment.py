@@ -1,57 +1,79 @@
-"""Offline experiment: detector quality + Static vs Retrain vs Transfer learning on the 60k-row stream."""
-import time, sys
-import numpy as np, pandas as pd
-import matplotlib; matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-from data_generator import generate, TRAIN_END, WINDOW, TARGET
-from drift_engine import StreamEngine, TransferGBR, RetrainGBR, StaticGBR, make_windows
+"""Run the five SGD incremental/continual strategies and save model_comparison.csv."""
+import numpy as np
+import pandas as pd
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 
-df = generate()
-N = len(df); wins = make_windows(N, TRAIN_END, WINDOW)
-regime = [df.regime.iloc[s] for s, e in wins]
-true_pts = df.index[df.true_drift_point.notna()].tolist()
+from data_generator import generate, TRAIN_END, WINDOW
+from drift_engine_incremental import StrategyRunner, STRATEGY_NAMES
 
-def run(cls, seed=0):
-    eng = StreamEngine(df, TRAIN_END, WINDOW, cls, seed); t0 = time.time()
-    rows = [eng.step(s, e) for s, e in wins]
-    return pd.DataFrame(rows), time.time() - t0, eng
+SEEDS = [0, 1, 2, 3, 4]
 
-res, secs = {}, {}
-for name, cls in [("Static (no adaptation)", StaticGBR), ("Full retrain (recent buffer)", RetrainGBR), ("Transfer learning (fine-tune)", TransferGBR)]:
-    res[name], secs[name], eng = run(cls); print(f"{name}: {secs[name]:.0f}s", flush=True)
 
-det = res["Transfer learning (fine-tune)"]       # detector output is identical for all (it never looks at the model)
-# ---- detector evaluation ----
-ev = []
-for i, d in enumerate(true_pts):
-    w0 = next(k for k, (s, e) in enumerate(wins) if s <= d < e); w1 = next((next(k for k, (s, e) in enumerate(wins) if s <= true_pts[i+1] < e) for _ in [0] if i+1 < len(true_pts)), len(wins))
-    hits = det[(det.window >= w0) & (det.window < w1) & det.alarm]
-    t = {(1,0):"data", (0,1):"relational", (1,1):"both"}[(int(df.data_drift.iloc[d]), int(df.concept_drift.iloc[d]))]
-    ev.append(dict(event=i+1, true_type=t, mode="gradual" if i == 2 else "sudden", true_window=w0,
-                   alarm_window=int(hits.window.iloc[0]) if len(hits) else None,
-                   delay_windows=int(hits.window.iloc[0]) - w0 if len(hits) else None,
-                   diagnosed_at_alarm=hits.diagnosis.iloc[0] if len(hits) else "MISSED",
-                   n_alarms_in_event=len(hits)))
-ev = pd.DataFrame(ev); print(ev.to_string(index=False))
-stable_alarm_windows = [int(k) for k in det.window[det.alarm] if regime[k] == "stable" and not any(0 <= k - next(j for j,(s,e) in enumerate(wins) if s <= d < e) <= 1 for d in true_pts)]
-print("alarms in stable periods (false alarms):", stable_alarm_windows)
+def main():
+    df = generate()
+    rows = []
+    for seed in SEEDS:
+        runner = StrategyRunner(df, TRAIN_END, WINDOW, seed=seed)
+        seed_rows = runner.run()
+        for row in seed_rows:
+            row["seed"] = seed
+        rows.extend(seed_rows)
 
-# ---- model comparison ----
-tab = pd.DataFrame({n: {r: r_.loc[[k for k, w in enumerate(regime) if w == r], "mae"].mean() for r in ["stable", "data_drift", "relational_drift", "both"]} for n, r_ in res.items()}).T
-tab["overall"] = [r_["mae"].mean() for r_ in res.values()]; tab["train+predict seconds"] = list(secs.values())
-print(tab.round(2).to_string())
-ev.to_csv("results/detector_events.csv", index=False); tab.round(3).to_csv("results/model_comparison.csv")
-det.drop(columns=["ks", "psi"]).to_csv("results/stream_log.csv", index=False)
+    detail = pd.DataFrame(rows)
+    # Re-run labels from the generated data for offline evaluation only.
+    true_points = df["true_drift_point"].dropna().astype(int).to_numpy() if "true_drift_point" in df.columns else np.array([], dtype=int)
+    if len(true_points):
+        detail["true_drift_event"] = [bool(np.any((true_points >= s) & (true_points < e))) for s, e in zip(detail["start"], detail["end"])]
+    else:
+        detail["true_drift_event"] = False
+    detail.to_csv("stream_results_incremental.csv", index=False)
 
-# ---- plot ----
-shade = {"stable": "#ffffff", "data_drift": "#fff2cc", "relational_drift": "#dae8fc", "both": "#f8cecc"}
-fig, ax = plt.subplots(2, 1, figsize=(13, 7), sharex=True)
-for a in ax:
-    for k, w in enumerate(regime): a.axvspan(k - .5, k + .5, color=shade[w], lw=0)
-for (n, r_), c in zip(res.items(), ["#444", "#1f77b4", "#d62728"]): ax[0].plot(r_.window, r_.mae, label=n, color=c, lw=1.6)
-ax[0].set_ylabel("MAE per batch (lower = better)"); ax[0].legend(); ax[0].set_title("Prediction error as the machine changes (yellow = data, blue = relational, red = both)")
-ax[1].plot(det.window, det.worst_ks, color="teal", label="worst KS (data)"); ax[1].axhline(0.2, color="teal", ls=":")
-ax[1].plot(det.window, det.mean_resid, color="purple", label="mean old-rule residual (relational)")
-for k in det.window[det.alarm]: ax[1].axvline(k, color="orange", lw=2)
-ax[1].set_xlabel("stream window (600 h)"); ax[1].legend(loc="upper left"); ax[1].set_title("Detector signals (orange = alarm)")
-plt.tight_layout(); plt.savefig("results/experiment.png", dpi=110)
+    summary = (
+        detail.groupby("strategy")[["mae", "rmse", "r2", "mae_x_normal"]]
+        .agg(["mean", "std"])
+        .reset_index()
+    )
+    summary.to_csv("model_comparison.csv", index=False)
+
+    # ------------------------------------------------------------
+    # OFFLINE DRIFT-DETECTOR CLASSIFICATION METRICS
+    # ------------------------------------------------------------
+    # Precision / recall / F1 / accuracy are appropriate here because
+    # the detector produces a binary event alarm. They are NOT used
+    # as regression metrics for health_deterioration.
+    # Ground truth is used only after the live run for evaluation.
+    detector_rows = []
+    for seed in SEEDS:
+        seed_detail = detail[detail["seed"] == seed].copy() if "seed" in detail.columns else detail.copy()
+        # true_drift_event is created below from the generator's true_drift_point.
+        if "true_drift_event" not in seed_detail.columns:
+            continue
+        y_true = seed_detail["true_drift_event"].astype(int)
+        y_pred = seed_detail["alarm"].astype(int)
+        cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+        detector_rows.append({
+            "seed": seed,
+            "accuracy": accuracy_score(y_true, y_pred),
+            "precision": precision_score(y_true, y_pred, zero_division=0),
+            "recall": recall_score(y_true, y_pred, zero_division=0),
+            "f1": f1_score(y_true, y_pred, zero_division=0),
+            "tn": int(cm[0, 0]), "fp": int(cm[0, 1]),
+            "fn": int(cm[1, 0]), "tp": int(cm[1, 1]),
+        })
+
+    if detector_rows:
+        detector_detail = pd.DataFrame(detector_rows)
+        detector_detail.to_csv("detector_metrics_by_seed.csv", index=False)
+        detector_summary = detector_detail[["accuracy", "precision", "recall", "f1"]].agg(["mean", "std"])
+        detector_summary.to_csv("detector_metrics_summary.csv")
+        print("\nDetector metrics (offline evaluation):")
+        print(detector_summary.to_string())
+
+    print("Strategies:", STRATEGY_NAMES)
+    print("Saved: stream_results_incremental.csv")
+    print("Saved: model_comparison.csv")
+    print(summary.to_string(index=False))
+
+
+if __name__ == "__main__":
+    main()
