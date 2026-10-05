@@ -1,15 +1,14 @@
-
 """
-Streamlit frontend for the existing drift-detection project.
-
-IMPORTANT:
-- Keep this file named: app.py
-- Keep the backend file named: drift_engine.py
-- data_generator.py is unchanged
-- No drift_engine_incremental.py is required.
+Streamlit frontend for the existing live drift-detection project.
 
 Run:
     streamlit run app.py
+
+IMPORTANT:
+- data_generator.py is unchanged
+- drift_engine.py is unchanged
+- The existing DualRunner / StreamEngine / TransferGBR interfaces are unchanged.
+- This file only improves the presentation layer.
 """
 
 import time
@@ -18,6 +17,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 
 from data_generator import generate, TRAIN_END, WINDOW
@@ -72,6 +72,10 @@ st.markdown(
             background: #FFFFFF;
         }}
 
+        [data-testid="stToolbar"] {{
+            background: #FFFFFF;
+        }}
+
         [data-testid="stMetric"] {{
             background: {COLORS["panel"]};
             border: 1px solid #D9E1EC;
@@ -99,6 +103,15 @@ st.markdown(
             font-size: 0.85rem;
         }}
 
+        .status-pill {{
+            display: inline-block;
+            padding: 5px 11px;
+            border-radius: 999px;
+            font-weight: 700;
+            font-size: 0.78rem;
+            letter-spacing: .02em;
+        }}
+
         div[data-testid="stTabs"] button {{
             font-weight: 650;
         }}
@@ -110,23 +123,21 @@ st.markdown(
 st.title("◈ Live Drift Intelligence")
 st.caption(
     "Predict → Detect → Diagnose → Adapt → Recover  |  "
-    "KS / PSI data drift  •  Page-Hinkley relational drift  •  "
-    "Incremental / Continual Learning"
+    "KS / PSI data drift  •  Page-Hinkley relational drift  •  Incremental / Continual Learning"
 )
 
 
 # ============================================================
-# DATA
+# EXISTING MODEL / DATA PIPELINE — UNCHANGED
 # ============================================================
 
-@st.cache_data(show_spinner="Generating synthetic stream…")
-def load_data():
-    return generate()
-
-
-# Data is loaded lazily only when the user starts the live stream.
-# This keeps the dashboard visible immediately after deployment.
-df = None
+@st.cache_resource(show_spinner="Generating data and pre-training the source model…")
+def load_assets():
+    df = generate()
+    pretrained = StreamEngine(
+        df, TRAIN_END, WINDOW, TransferGBR, 0
+    ).model
+    return df, pretrained
 
 
 # ============================================================
@@ -135,7 +146,6 @@ df = None
 
 def make_fig(title, y_title=None, height=370):
     fig = go.Figure()
-
     fig.update_layout(
         title=dict(text=title, x=0.01, xanchor="left"),
         template="plotly_white",
@@ -163,24 +173,11 @@ def make_fig(title, y_title=None, height=370):
             zeroline=False,
         ),
     )
-
     return fig
 
 
-def read_csv(name):
-    path = Path(__file__).resolve().parent / name
-
-    if not path.exists():
-        return None
-
-    try:
-        return pd.read_csv(path)
-    except Exception:
-        return None
-
-
 def add_event_lines(fig, events, show_truth):
-    seen = set()
+    labels_seen = set()
 
     for event in events:
         kind = event["type"]
@@ -201,26 +198,22 @@ def add_event_lines(fig, events, show_truth):
         }[kind]
 
         label = {
-            "truth": "True drift",
+            "truth": "True drift start",
             "alarm": "Drift detected",
-            "adapt": "Adaptation",
+            "adapt": "Adaptation / recovery",
         }[kind]
 
-        if kind not in seen:
+        if kind not in labels_seen:
             fig.add_trace(
                 go.Scatter(
                     x=[None],
                     y=[None],
                     mode="lines",
                     name=label,
-                    line=dict(
-                        color=color,
-                        dash=dash,
-                        width=2,
-                    ),
+                    line=dict(color=color, dash=dash, width=2),
                 )
             )
-            seen.add(kind)
+            labels_seen.add(kind)
 
         fig.add_vline(
             x=event["window"],
@@ -233,36 +226,66 @@ def add_event_lines(fig, events, show_truth):
     return fig
 
 
-def build_truth_events(data):
-    events = []
+def get_history_df():
+    if not st.session_state.history:
+        return pd.DataFrame()
+    return pd.DataFrame(st.session_state.history).sort_values("window")
 
-    if "true_drift_point" not in data.columns:
-        return events
 
-    points = (
-        pd.to_numeric(
-            data["true_drift_point"],
-            errors="coerce",
+def diagnosis_color(diagnosis):
+    value = str(diagnosis).lower()
+    if value == "both":
+        return COLORS["danger"]
+    if value == "data":
+        return COLORS["data"]
+    if value == "relational":
+        return COLORS["relational"]
+    return COLORS["adapt"]
+
+
+def read_optional_csv(filename):
+    path = Path(__file__).resolve().parent / filename
+    if not path.exists():
+        return None
+    try:
+        return pd.read_csv(path)
+    except Exception:
+        return None
+
+
+def add_regime_bands(fig, df, show_truth):
+    if not show_truth or "regime" not in df.columns:
+        return fig
+
+    # Only add bands when the generated dataset actually exposes regimes.
+    regimes = df[["window", "regime"]].drop_duplicates().sort_values("window")
+
+    for i in range(len(regimes)):
+        start = regimes.iloc[i]["window"]
+        end = (
+            regimes.iloc[i + 1]["window"]
+            if i + 1 < len(regimes)
+            else df["window"].max()
         )
-        .dropna()
-        .unique()
-    )
 
-    for point in points:
-        point = int(point)
+        regime = str(regimes.iloc[i]["regime"]).lower()
 
-        # Convert row position into stream-window position.
-        if point >= TRAIN_END:
-            window_number = (point - TRAIN_END) // WINDOW
-            events.append(
-                {
-                    "window": int(window_number),
-                    "type": "truth",
-                    "row": point,
-                }
-            )
+        color = {
+            "stable": "rgba(148,163,184,0.05)",
+            "data_drift": "rgba(56,189,248,0.10)",
+            "relational_drift": "rgba(167,139,250,0.10)",
+            "both": "rgba(239,68,68,0.10)",
+        }.get(regime, "rgba(148,163,184,0.04)")
 
-    return events
+        fig.add_vrect(
+            x0=start,
+            x1=end,
+            fillcolor=color,
+            line_width=0,
+            layer="below",
+        )
+
+    return fig
 
 
 # ============================================================
@@ -276,17 +299,15 @@ with st.sidebar:
         "Seconds per window",
         min_value=0.0,
         max_value=2.0,
-        value=0.0,
+        value=0.2,
         step=0.1,
     )
 
     show_truth = st.checkbox(
         "Show simulated ground truth",
         value=False,
-        help=(
-            "Ground truth is used only for offline evaluation and "
-            "visualization. It is never used by the live detector."
-        ),
+        help="Ground truth is displayed for demonstration/evaluation only. "
+             "It is never used by the live detector.",
     )
 
     start = st.button(
@@ -298,7 +319,6 @@ with st.sidebar:
     st.divider()
 
     st.markdown("### Pipeline")
-
     st.markdown(
         """
         **1. Predict**  
@@ -311,7 +331,7 @@ with st.sidebar:
         DATA / RELATIONAL / BOTH
 
         **4. Adapt**  
-        Incremental learning
+        Incremental / continual learning
 
         **5. Recover**  
         Monitor post-drift error
@@ -319,12 +339,27 @@ with st.sidebar:
     )
 
     st.divider()
-
     st.caption(
-        "Static, Incremental SGD, and Continual Learning "
-        "with Replay(100/500) are compared live. "
-        "Full retraining remains in `run_experiment.py`."
+        "Static, Incremental SGD, and Continual Learning with Replay(100/500). "
+        "Ground truth is used only for evaluation/visualization."
     )
+
+
+# ============================================================
+# SESSION STATE
+# ============================================================
+
+if "history" not in st.session_state:
+    st.session_state.history = []
+
+if "events" not in st.session_state:
+    st.session_state.events = []
+
+
+if start:
+    st.session_state.history = []
+    st.session_state.events = []
+
 
 
 # ============================================================
@@ -346,10 +381,32 @@ if "stream_df" not in st.session_state:
 if "stream_index" not in st.session_state:
     st.session_state.stream_index = 0
 
+if "stream_running" not in st.session_state:
+    st.session_state.stream_running = False
+
+if "stream_finished" not in st.session_state:
+    st.session_state.stream_finished = False
+
 if start:
     st.session_state.history = []
     st.session_state.events = []
+    st.session_state.stream_index = 0
+    st.session_state.stream_running = True
+    st.session_state.stream_finished = False
+    st.session_state.stream_df = load_data()
 
+    st.session_state.live_runner = StrategyRunner(
+        st.session_state.stream_df,
+        TRAIN_END,
+        WINDOW,
+        seed=0,
+        strategies=[
+            "Static",
+            "Incremental",
+            "Continual + replay(100)",
+            "Continual + replay(500)",
+        ],
+    )
 
 # ============================================================
 # TABS
@@ -366,856 +423,135 @@ tabs = st.tabs(
     ]
 )
 
-
 # ============================================================
-# LIVE MONITOR
+# DATA HELPERS
 # ============================================================
 
-with tabs[0]:
+def history_for(strategy=None):
+    d = pd.DataFrame(st.session_state.history)
 
-    st.markdown(
-        '<div class="section-title">Live model behaviour</div>',
-        unsafe_allow_html=True,
+    if d.empty:
+        return d
+
+    if strategy is not None and "strategy" in d.columns:
+        d = d[d["strategy"] == strategy].copy()
+
+    return d.sort_values("window").reset_index(drop=True)
+
+
+def current_rows():
+    d = pd.DataFrame(st.session_state.history)
+
+    if d.empty or "strategy" not in d.columns:
+        return {}
+
+    result = {}
+    for name in [
+        "Static",
+        "Incremental",
+        "Continual + replay(100)",
+        "Continual + replay(500)",
+    ]:
+        x = d[d["strategy"] == name]
+        if not x.empty:
+            result[name] = x.iloc[-1]
+
+    return result
+
+
+def build_truth_events(data):
+    events = []
+
+    if data is None or "true_drift_point" not in data.columns:
+        return events
+
+    points = (
+        pd.to_numeric(
+            data["true_drift_point"],
+            errors="coerce",
+        )
+        .dropna()
+        .unique()
     )
 
-    # The live runner stores one row per strategy:
-    # Static, Incremental, Replay(100), Replay(500).
-    # Therefore do NOT expect a `mae_static` column in every row.
-    history = pd.DataFrame(
-        st.session_state.history
-    )
-
-    if history.empty:
-
-        st.info(
-            "Click **Start / restart live stream** to begin. "
-            "The charts will update window-by-window."
-        )
-
-    else:
-
-        incremental = history[
-            history["strategy"] == "Incremental"
-        ].copy()
-
-        static = history[
-            history["strategy"] == "Static"
-        ].copy()
-
-        replay100 = history[
-            history["strategy"] == "Continual + replay(100)"
-        ].copy()
-
-        replay500 = history[
-            history["strategy"] == "Continual + replay(500)"
-        ].copy()
-
-        if not incremental.empty:
-
-            last = incremental.iloc[-1]
-
-            metric_cols = st.columns(6)
-
-            metric_cols[0].metric(
-                "CURRENT WINDOW",
-                int(last["window"]) + 1,
-            )
-
-            metric_cols[1].metric(
-                "DIAGNOSIS",
-                str(last["diagnosis"]).upper(),
-            )
-
-            metric_cols[2].metric(
-                "INCREMENTAL MAE",
-                f"{last['mae']:.3f}",
-            )
-
-            metric_cols[3].metric(
-                "REPLAY 100 MAE",
-                f"{replay100.iloc[-1]['mae']:.3f}"
-                if not replay100.empty
-                else "—",
-            )
-
-            metric_cols[4].metric(
-                "REPLAY 500 MAE",
-                f"{replay500.iloc[-1]['mae']:.3f}"
-                if not replay500.empty
-                else "—",
-            )
-
-            metric_cols[5].metric(
-                "INCREMENTAL R²",
-                f"{last['r2']:.3f}",
-            )
-
-            # Live learning chart.
-            fig = make_fig(
-                "Live learning behaviour",
-                "MAE",
-                420,
-            )
-
-            if not static.empty:
-                fig.add_trace(
-                    go.Scatter(
-                        x=static["window"],
-                        y=static["mae"],
-                        mode="lines+markers",
-                        name="Static — no adaptation",
-                        line=dict(
-                            color=COLORS["static"],
-                            width=2.5,
-                        ),
-                        marker=dict(size=3),
-                    )
-                )
-
-            fig.add_trace(
-                go.Scatter(
-                    x=incremental["window"],
-                    y=incremental["mae"],
-                    mode="lines+markers",
-                    name="Incremental SGD",
-                    line=dict(
-                        color=COLORS["incremental"],
-                        width=3,
-                    ),
-                    marker=dict(size=3),
-                )
-            )
-
-            if not replay100.empty:
-                fig.add_trace(
-                    go.Scatter(
-                        x=replay100["window"],
-                        y=replay100["mae"],
-                        mode="lines+markers",
-                        name="Continual + Replay 100",
-                        line=dict(
-                            color="#2563EB",
-                            width=2.5,
-                        ),
-                        marker=dict(size=3),
-                    )
-                )
-
-            if not replay500.empty:
-                fig.add_trace(
-                    go.Scatter(
-                        x=replay500["window"],
-                        y=replay500["mae"],
-                        mode="lines+markers",
-                        name="Continual + Replay 500",
-                        line=dict(
-                            color="#9333EA",
-                            width=2.5,
-                        ),
-                        marker=dict(size=3),
-                    )
-                )
-
-            fig = add_event_lines(
-                fig,
-                st.session_state.events,
-                show_truth,
-            )
-
-            st.plotly_chart(
-                fig,
-                width="stretch",
-                key=f"top_live_model_{len(history)}",
-            )
-
-            # Live detector chart.
-            drift_fig = make_fig(
-                "Live drift detection",
-                "Signal",
-                380,
-            )
-
-            drift_fig.add_trace(
-                go.Scatter(
-                    x=incremental["window"],
-                    y=incremental["worst_ks"],
-                    mode="lines",
-                    name="Worst KS",
-                    line=dict(
-                        color=COLORS["data"],
-                        width=2.5,
-                    ),
-                )
-            )
-
-            drift_fig.add_trace(
-                go.Scatter(
-                    x=incremental["window"],
-                    y=incremental["worst_psi"],
-                    mode="lines",
-                    name="Worst PSI",
-                    line=dict(
-                        color=COLORS["relational"],
-                        width=2.5,
-                    ),
-                )
-            )
-
-            drift_fig.add_trace(
-                go.Scatter(
-                    x=incremental["window"],
-                    y=incremental["ph_stat"],
-                    mode="lines",
-                    name="Page-Hinkley",
-                    line=dict(
-                        color=COLORS["alarm"],
-                        width=2.5,
-                    ),
-                )
-            )
-
-            st.plotly_chart(
-                drift_fig,
-                width="stretch",
-                key=f"top_live_drift_{len(history)}",
-            )
-
-# ============================================================
-# DRIFT ANALYSIS
-# ============================================================
-
-with tabs[1]:
-
-    history = pd.DataFrame(
-        st.session_state.history
-    )
-
-    if history.empty:
-        saved = read_csv("stream_log.csv")
-        if saved is not None:
-            history = saved
-
-    if history.empty:
-        st.info(
-            "Run the live stream or `run_experiment.py` first."
-        )
-
-    else:
-
-        left, right = st.columns(2)
-
-        with left:
-            if "worst_ks" in history.columns:
-
-                fig = make_fig(
-                    "Worst KS statistic",
-                    "KS statistic",
-                )
-
-                fig.add_trace(
-                    go.Scatter(
-                        x=history["window"],
-                        y=history["worst_ks"],
-                        name="Worst KS",
-                        line=dict(
-                            color=COLORS["data"],
-                            width=2.5,
-                        ),
-                    )
-                )
-
-                fig.add_hline(
-                    y=0.15,
-                    line_dash="dash",
-                    line_color=COLORS["alarm"],
-                )
-
-                st.plotly_chart(
-                    fig,
-                    width="stretch",
-                )
-
-        with right:
-            if "worst_psi" in history.columns:
-
-                fig = make_fig(
-                    "Worst PSI",
-                    "PSI",
-                )
-
-                fig.add_trace(
-                    go.Scatter(
-                        x=history["window"],
-                        y=history["worst_psi"],
-                        name="Worst PSI",
-                        line=dict(
-                            color=COLORS["relational"],
-                            width=2.5,
-                        ),
-                    )
-                )
-
-                fig.add_hline(
-                    y=0.25,
-                    line_dash="dash",
-                    line_color=COLORS["alarm"],
-                )
-
-                st.plotly_chart(
-                    fig,
-                    width="stretch",
-                )
-
-        if "ph_stat" in history.columns:
-
-            fig = make_fig(
-                "Page-Hinkley relational-drift signal",
-                "PH statistic",
-            )
-
-            fig.add_trace(
-                go.Scatter(
-                    x=history["window"],
-                    y=history["ph_stat"],
-                    name="Page-Hinkley",
-                    line=dict(
-                        color=COLORS["relational"],
-                        width=2.5,
-                    ),
-                )
-            )
-
-            st.plotly_chart(
-                fig,
-                width="stretch",
-            )
-
-        if "ks" in history.columns:
-            latest = history.iloc[-1]
-
-            ks_values = latest["ks"]
-
-            if isinstance(ks_values, str):
-                try:
-                    import ast as _ast
-                    ks_values = _ast.literal_eval(ks_values)
-                except Exception:
-                    ks_values = {}
-
-            if isinstance(ks_values, dict) and ks_values:
-
-                sensor_df = (
-                    pd.Series(
-                        ks_values,
-                        dtype=float,
-                    )
-                    .sort_values()
-                    .reset_index()
-                )
-
-                sensor_df.columns = [
-                    "Sensor",
-                    "KS",
-                ]
-
-                fig = go.Figure(
-                    go.Bar(
-                        x=sensor_df["KS"],
-                        y=sensor_df["Sensor"],
-                        orientation="h",
-                    )
-                )
-
-                fig.update_layout(
-                    title="Latest sensor-level KS statistics",
-                    template="plotly_white",
-                    paper_bgcolor=COLORS["panel"],
-                    plot_bgcolor=COLORS["panel"],
-                    font=dict(color=COLORS["text"]),
-                    height=360,
-                    xaxis=dict(
-                        title="KS statistic",
-                        gridcolor=COLORS["grid"],
-                    ),
-                    yaxis=dict(
-                        title="Sensor",
-                        gridcolor=COLORS["grid"],
-                    ),
-                )
-
-                st.plotly_chart(
-                    fig,
-                    width="stretch",
-                )
-
-
-# ============================================================
-# MODEL PERFORMANCE
-# ============================================================
-
-with tabs[2]:
-
-    comparison = read_csv("model_comparison.csv")
-
-    if comparison is None or comparison.empty:
-
-        st.info(
-            "Run `run_experiment.py` first to generate "
-            "`model_comparison.csv`."
-        )
-
-    else:
-
-        st.subheader("Learning strategy comparison")
-
-        st.dataframe(
-            comparison,
-            width="stretch",
-            hide_index=True,
-        )
-
-        metric_candidates = [
-            "MAE",
-            "RMSE",
-            "R2",
-            "R²",
-        ]
-
-        available = [
-            x for x in metric_candidates
-            if x in comparison.columns
-        ]
-
-        strategy_col = next(
-            (
-                x for x in
-                ["Strategy", "strategy", "Model", "Method"]
-                if x in comparison.columns
-            ),
-            None,
-        )
-
-        if available and strategy_col:
-
-            selected_metric = st.selectbox(
-                "Metric",
-                available,
-            )
-
-            fig = make_fig(
-                f"{selected_metric} by learning strategy",
-                selected_metric,
-                400,
-            )
-
-            fig.add_trace(
-                go.Bar(
-                    x=comparison[strategy_col],
-                    y=comparison[selected_metric],
-                    name=selected_metric,
-                )
-            )
-
-            st.plotly_chart(
-                fig,
-                width="stretch",
-            )
-
-        st.markdown("### Metrics")
-
-        st.markdown(
-            """
-            **MAE ↓** — average absolute prediction error  
-            **RMSE ↓** — penalizes larger errors more strongly  
-            **R² ↑** — proportion of target variance explained
-            """
-        )
-
-
-# ============================================================
-# ADAPTATION & RECOVERY
-# ============================================================
-
-with tabs[3]:
-
-    history = pd.DataFrame(
-        st.session_state.history
-    )
-
-    if history.empty:
-        history = read_csv("stream_log.csv")
-
-    if history is None or history.empty:
-        st.info(
-            "Run the live stream or `run_experiment.py` first."
-        )
-
-    else:
-
-        c1, c2, c3, c4 = st.columns(4)
-
-        c1.metric(
-            "Drift alarms",
-            int(
-                history["alarm"].astype(bool).sum()
-            )
-            if "alarm" in history
-            else 0,
-        )
-
-        c2.metric(
-            "Adapted windows",
-            int(
-                history["adapted"].astype(bool).sum()
-            )
-            if "adapted" in history
-            else 0,
-        )
-
-        c3.metric(
-            "Recovery events",
-            int(
-                history["recovery"].astype(bool).sum()
-            )
-            if "recovery" in history
-            else 0,
-        )
-
-        c4.metric(
-            "Final MAE",
-            f"{history['mae'].iloc[-1]:.3f}"
-            if "mae" in history
-            else "—",
-        )
-
-        fig = make_fig(
-            "Prediction error and adaptation",
-            "MAE",
-            400,
-        )
-
-        if "mae_static" in history:
-            fig.add_trace(
-                go.Scatter(
-                    x=history["window"],
-                    y=history["mae_static"],
-                    name="Static",
-                    line=dict(
-                        color=COLORS["static"],
-                        width=2.5,
-                    ),
-                )
-            )
-
-        if "mae" in history:
-            fig.add_trace(
-                go.Scatter(
-                    x=history["window"],
-                    y=history["mae"],
-                    name="Incremental SGD",
-                    line=dict(
-                        color=COLORS["incremental"],
-                        width=3,
-                    ),
-                )
-            )
-
-        st.plotly_chart(
-            fig,
-            width="stretch",
-        )
-
-        st.dataframe(
-            history[
-                [
-                    c for c in [
-                        "window",
-                        "diagnosis",
-                        "alarm",
-                        "adapted",
-                        "recovery",
-                        "mae",
-                        "rmse",
-                        "r2",
-                        "updates_seen",
-                    ]
-                    if c in history.columns
-                ]
-            ].tail(100),
-            width="stretch",
-            hide_index=True,
-        )
-
-
-# ============================================================
-# DETECTOR EVALUATION
-# ============================================================
-
-with tabs[4]:
-
-    metrics = read_csv(
-        "detector_metrics_summary.csv"
-    )
-
-    if metrics is None or metrics.empty:
-
-        st.info(
-            "Run `run_experiment.py` first to generate "
-            "`detector_metrics_summary.csv`."
-        )
-
-    else:
-
-        st.subheader(
-            "Drift detector performance"
-        )
-
-        st.dataframe(
-            metrics,
-            width="stretch",
-            hide_index=True,
-        )
-
-        st.caption(
-            "Ground-truth drift labels are used only here, "
-            "offline, to evaluate the detector. They are not "
-            "used during prediction, detection, diagnosis, "
-            "or adaptation."
-        )
-
-        by_seed = read_csv(
-            "detector_metrics_by_seed.csv"
-        )
-
-        if by_seed is not None and not by_seed.empty:
-            st.markdown(
-                "### Metrics across random seeds"
-            )
-            st.dataframe(
-                by_seed,
-                width="stretch",
-                hide_index=True,
-            )
-
-
-# ============================================================
-# EVENT LOG
-# ============================================================
-
-with tabs[5]:
-
-    events = read_csv(
-        "detector_events.csv"
-    )
-
-    if events is None or events.empty:
-
-        st.info(
-            "Run `run_experiment.py` first to generate "
-            "`detector_events.csv`."
-        )
-
-    else:
-
-        st.subheader("Detector event log")
-
-        st.dataframe(
-            events,
-            width="stretch",
-            hide_index=True,
-        )
-
-
-# ============================================================
-# LIVE STREAM EXECUTION
-# ============================================================
-# ============================================================
-# LIVE STREAM EXECUTION
-# ============================================================
-#
-# Streamlit reruns the script from top to bottom after every interaction.
-# For a real live dashboard, process ONE window per rerun and keep the
-# runner/history in session_state. This lets the browser receive the
-# updated charts after every window.
-
-if "stream_running" not in st.session_state:
-    st.session_state.stream_running = False
-
-if "stream_finished" not in st.session_state:
-    st.session_state.stream_finished = False
-
-if start:
-    with st.spinner(
-        "Generating the synthetic stream and initializing "
-        "incremental/continual learners..."
-    ):
-        st.session_state.stream_df = load_data()
-
-    st.session_state.live_runner = StrategyRunner(
-        st.session_state.stream_df,
-        TRAIN_END,
-        WINDOW,
-        seed=0,
-        strategies=[
-            "Static",
-            "Incremental",
-            "Continual + replay(100)",
-            "Continual + replay(500)",
-        ],
-    )
-
-    st.session_state.history = []
-    st.session_state.events = []
-    st.session_state.stream_index = 0
-    st.session_state.stream_running = True
-    st.session_state.stream_finished = False
-
-    st.rerun()
-
-
-# ------------------------------------------------------------
-# PROCESS EXACTLY ONE WINDOW PER SCRIPT RUN
-# ------------------------------------------------------------
-
-if st.session_state.stream_running:
-
-    runner = st.session_state.live_runner
-    stream_df = st.session_state.stream_df
-    windows = runner.windows
-    i = st.session_state.stream_index
-
-    if i < len(windows):
-
-        s, e = windows[i]
-
-        batch = runner.step(s, e)
-
-        primary = batch["Incremental"]
-
-        # Save every learning strategy.
-        for strategy_name, row in batch.items():
-            saved_row = dict(row)
-            saved_row["strategy"] = strategy_name
-            st.session_state.history.append(saved_row)
-
-        # Detector/adaptation events are based on the Incremental stream.
-        if primary.get("alarm"):
-            st.session_state.events.append(
+    for point in points:
+        point = int(point)
+
+        if point >= TRAIN_END:
+            events.append(
                 {
-                    "window": int(primary["window"]),
-                    "type": "alarm",
-                    "diagnosis": str(
-                        primary.get("diagnosis", "")
+                    "window": int(
+                        (point - TRAIN_END) // WINDOW
                     ),
+                    "type": "truth",
                 }
             )
 
-        if primary.get("adapted"):
-            st.session_state.events.append(
-                {
-                    "window": int(primary["window"]),
-                    "type": "adapt",
-                    "diagnosis": str(
-                        primary.get("diagnosis", "")
+    return events
+
+
+def add_event_lines_clean(fig, events, show_truth):
+    labels_seen = set()
+
+    for event in events:
+        kind = event["type"]
+
+        if kind == "truth" and not show_truth:
+            continue
+
+        color = {
+            "truth": COLORS["truth"],
+            "alarm": COLORS["alarm"],
+            "adapt": COLORS["adapt"],
+        }[kind]
+
+        dash = {
+            "truth": "dash",
+            "alarm": "solid",
+            "adapt": "dot",
+        }[kind]
+
+        label = {
+            "truth": "True drift start",
+            "alarm": "New drift alarm",
+            "adapt": "Adaptation",
+        }[kind]
+
+        if kind not in labels_seen:
+            fig.add_trace(
+                go.Scatter(
+                    x=[None],
+                    y=[None],
+                    mode="lines",
+                    name=label,
+                    line=dict(
+                        color=color,
+                        dash=dash,
+                        width=2,
                     ),
-                }
+                )
             )
+            labels_seen.add(kind)
 
-        if show_truth:
-            truth_events_now = build_truth_events(stream_df)
+        fig.add_vline(
+            x=event["window"],
+            line_color=color,
+            line_dash=dash,
+            line_width=1.5,
+            opacity=0.75,
+        )
 
-            for event in truth_events_now:
-                if event["window"] == primary["window"]:
-                    if not any(
-                        x["type"] == "truth"
-                        and x["window"] == event["window"]
-                        for x in st.session_state.events
-                    ):
-                        st.session_state.events.append(event)
-
-        st.session_state.stream_index += 1
-
-        # If this was the final window, stop after displaying it.
-        if st.session_state.stream_index >= len(windows):
-            st.session_state.stream_running = False
-            st.session_state.stream_finished = True
+    return fig
 
 
-# ------------------------------------------------------------
-# RENDER THE CURRENT LIVE STATE
-# ------------------------------------------------------------
-
-if st.session_state.history:
-
-    history = pd.DataFrame(
-        st.session_state.history
-    )
-
-    primary_history = history[
-        history["strategy"] == "Incremental"
-    ].copy()
-
-    latest = primary_history.iloc[-1]
-
-    # Current metrics.
-    current_rows = {
-        strategy: history[
-            history["strategy"] == strategy
-        ].iloc[-1]
-        for strategy in [
-            "Static",
-            "Incremental",
-            "Continual + replay(100)",
-            "Continual + replay(500)",
-        ]
-        if not history[
-            history["strategy"] == strategy
-        ].empty
-    }
-
-    metric_cols = st.columns(6)
-
-    metric_cols[0].metric(
-        "CURRENT WINDOW",
-        int(latest["window"]) + 1,
-    )
-
-    metric_cols[1].metric(
-        "DIAGNOSIS",
-        str(latest["diagnosis"]).upper(),
-    )
-
-    metric_cols[2].metric(
-        "INCREMENTAL MAE",
-        f"{current_rows['Incremental']['mae']:.3f}",
-    )
-
-    metric_cols[3].metric(
-        "REPLAY 100 MAE",
-        f"{current_rows['Continual + replay(100)']['mae']:.3f}",
-    )
-
-    metric_cols[4].metric(
-        "REPLAY 500 MAE",
-        f"{current_rows['Continual + replay(500)']['mae']:.3f}",
-    )
-
-    metric_cols[5].metric(
-        "INCREMENTAL R²",
-        f"{current_rows['Incremental']['r2']:.3f}",
-    )
-
-    # --------------------------------------------------------
-    # CHART 1: LEARNING BEHAVIOUR
-    # --------------------------------------------------------
-
-    model_fig = make_fig(
-        "Live learning behaviour",
+def plot_learning_chart(d, height=390):
+    fig = make_fig(
+        "Live learning behaviour · lower MAE is better",
         "MAE",
-        430,
+        height,
     )
 
-    chart_specs = [
+    specs = [
         (
             "Static",
             "Static — no adaptation",
@@ -1242,53 +578,48 @@ if st.session_state.history:
         ),
     ]
 
-    for strategy, label, color, width in chart_specs:
+    for strategy, label, color, width in specs:
+        h = d[d["strategy"] == strategy]
 
-        h = history[
-            history["strategy"] == strategy
-        ]
+        if h.empty:
+            continue
 
-        if not h.empty:
-            model_fig.add_trace(
-                go.Scatter(
-                    x=h["window"],
-                    y=h["mae"],
-                    mode="lines+markers",
-                    name=label,
-                    line=dict(
-                        color=color,
-                        width=width,
-                    ),
-                    marker=dict(size=4),
-                )
+        fig.add_trace(
+            go.Scatter(
+                x=h["window"],
+                y=h["mae"],
+                mode="lines+markers",
+                name=label,
+                line=dict(
+                    color=color,
+                    width=width,
+                ),
+                marker=dict(size=3),
             )
+        )
 
-    model_fig = add_event_lines(
-        model_fig,
-        st.session_state.events,
-        show_truth,
-    )
+    return fig
 
-    st.plotly_chart(
-        model_fig,
-        width="stretch",
-        key=f"live_model_chart_{len(history)}",
-    )
 
-    # --------------------------------------------------------
-    # CHART 2: DRIFT DETECTION
-    # --------------------------------------------------------
-
-    drift_fig = make_fig(
-        "Live drift detection",
+def plot_drift_chart(d, height=390):
+    fig = make_fig(
+        "Drift detector signals",
         "Signal",
-        400,
+        height,
     )
 
-    drift_fig.add_trace(
+    if d.empty:
+        return fig
+
+    inc = d[d["strategy"] == "Incremental"]
+
+    if inc.empty:
+        return fig
+
+    fig.add_trace(
         go.Scatter(
-            x=primary_history["window"],
-            y=primary_history["worst_ks"],
+            x=inc["window"],
+            y=inc["worst_ks"],
             mode="lines+markers",
             name="Worst KS",
             line=dict(
@@ -1299,10 +630,10 @@ if st.session_state.history:
         )
     )
 
-    drift_fig.add_trace(
+    fig.add_trace(
         go.Scatter(
-            x=primary_history["window"],
-            y=primary_history["worst_psi"],
+            x=inc["window"],
+            y=inc["worst_psi"],
             mode="lines+markers",
             name="Worst PSI",
             line=dict(
@@ -1313,10 +644,10 @@ if st.session_state.history:
         )
     )
 
-    drift_fig.add_trace(
+    fig.add_trace(
         go.Scatter(
-            x=primary_history["window"],
-            y=primary_history["ph_stat"],
+            x=inc["window"],
+            y=inc["ph_stat"],
             mode="lines+markers",
             name="Page-Hinkley",
             line=dict(
@@ -1327,57 +658,535 @@ if st.session_state.history:
         )
     )
 
-    st.plotly_chart(
-        drift_fig,
-        width="stretch",
-        key=f"live_drift_chart_{len(history)}",
+    return fig
+
+
+# ============================================================
+# LIVE MONITOR
+# ============================================================
+
+with tabs[0]:
+
+    st.markdown(
+        '<div class="section-title">Live model behaviour</div>',
+        unsafe_allow_html=True,
     )
 
-    # --------------------------------------------------------
-    # LIVE STATUS
-    # --------------------------------------------------------
+    rows = current_rows()
 
-    total_windows = (
-        len(st.session_state.live_runner.windows)
-        if st.session_state.live_runner is not None
-        else 0
-    )
-
-    if st.session_state.stream_running:
-
-        progress = (
-            st.session_state.stream_index
-            / max(1, total_windows)
+    if not rows:
+        st.info(
+            "Press **Start / restart live stream** to begin. "
+            "The charts will update one stream window at a time."
         )
 
-        st.progress(
-            progress,
-            text=(
-                f"Live window "
-                f"{st.session_state.stream_index}/{total_windows} "
-                f"• {str(latest['diagnosis']).upper()} "
-                f"• Alarm: "
-                f"{'YES' if latest['alarm'] else 'NO'} "
-                f"• Adapted: "
-                f"{'YES' if latest['adapted'] else 'NO'}"
+    else:
+
+        last = rows["Incremental"]
+
+        cols = st.columns(6)
+
+        cols[0].metric(
+            "CURRENT WINDOW",
+            int(last["window"]) + 1,
+        )
+
+        cols[1].metric(
+            "CURRENT DIAGNOSIS",
+            str(last["diagnosis"]).upper(),
+        )
+
+        cols[2].metric(
+            "NEW ALARM",
+            "YES" if bool(last["alarm"]) else "NO",
+        )
+
+        cols[3].metric(
+            "INCREMENTAL MAE",
+            f"{last['mae']:.3f}",
+        )
+
+        cols[4].metric(
+            "REPLAY 100 MAE",
+            f"{rows['Continual + replay(100)']['mae']:.3f}",
+        )
+
+        cols[5].metric(
+            "INCREMENTAL R²",
+            f"{last['r2']:.3f}",
+        )
+
+        all_history = pd.DataFrame(
+            st.session_state.history
+        )
+
+        st.plotly_chart(
+            add_event_lines_clean(
+                plot_learning_chart(all_history),
+                st.session_state.events,
+                show_truth,
             ),
+            width="stretch",
+            key=f"live_learning_{len(all_history)}",
         )
 
-        # Wait a little, then trigger the next window. The browser has
-        # already rendered the current charts before the next rerun.
-        time.sleep(max(0.05, float(delay)))
-        st.rerun()
-
-    elif st.session_state.stream_finished:
-
-        st.success(
-            f"✓ Live stream completed — "
-            f"{total_windows} windows processed."
+        st.plotly_chart(
+            plot_drift_chart(all_history),
+            width="stretch",
+            key=f"live_drift_{len(all_history)}",
         )
 
-elif not st.session_state.stream_running:
+        st.caption(
+            "Diagnosis shows the current drift state. "
+            "**New Alarm** shows whether a new alarm fired in this window. "
+            "A diagnosis can remain DATA/RELATIONAL/BOTH after the original "
+            "alarm because the detector keeps the active drift state latched."
+        )
 
-    st.info(
-        "Click **Start / restart live stream** to begin. "
-        "The charts will update window-by-window like a live monitor."
+
+# ============================================================
+# DRIFT ANALYSIS
+# ============================================================
+
+with tabs[1]:
+
+    inc = history_for("Incremental")
+
+    if inc.empty:
+        st.info(
+            "Run the live stream first to populate drift analysis."
+        )
+
+    else:
+
+        left, right = st.columns(2)
+
+        with left:
+            fig = make_fig(
+                "Worst KS statistic",
+                "KS statistic",
+                360,
+            )
+
+            fig.add_trace(
+                go.Scatter(
+                    x=inc["window"],
+                    y=inc["worst_ks"],
+                    mode="lines+markers",
+                    name="Worst KS",
+                    line=dict(
+                        color=COLORS["data"],
+                        width=2.5,
+                    ),
+                )
+            )
+
+            fig.add_hline(
+                y=0.15,
+                line_dash="dash",
+                line_color=COLORS["alarm"],
+            )
+
+            st.plotly_chart(
+                fig,
+                width="stretch",
+            )
+
+        with right:
+            fig = make_fig(
+                "Worst PSI",
+                "PSI",
+                360,
+            )
+
+            fig.add_trace(
+                go.Scatter(
+                    x=inc["window"],
+                    y=inc["worst_psi"],
+                    mode="lines+markers",
+                    name="Worst PSI",
+                    line=dict(
+                        color=COLORS["relational"],
+                        width=2.5,
+                    ),
+                )
+            )
+
+            fig.add_hline(
+                y=0.25,
+                line_dash="dash",
+                line_color=COLORS["alarm"],
+            )
+
+            st.plotly_chart(
+                fig,
+                width="stretch",
+            )
+
+        fig = make_fig(
+            "Page-Hinkley relational-drift signal",
+            "PH statistic",
+            360,
+        )
+
+        fig.add_trace(
+            go.Scatter(
+                x=inc["window"],
+                y=inc["ph_stat"],
+                mode="lines+markers",
+                name="Page-Hinkley",
+                line=dict(
+                    color=COLORS["alarm"],
+                    width=2.5,
+                ),
+            )
+        )
+
+        st.plotly_chart(
+            fig,
+            width="stretch",
+        )
+
+
+# ============================================================
+# MODEL PERFORMANCE
+# ============================================================
+
+with tabs[2]:
+
+    comparison = read_optional_csv(
+        "model_comparison.csv"
+    )
+
+    if comparison is not None and not comparison.empty:
+
+        st.subheader(
+            "Offline learning-strategy comparison"
+        )
+
+        preferred = [
+            "Model",
+            "Strategy",
+            "Method",
+            "MAE",
+            "RMSE",
+            "R2",
+            "R²",
+            "Training time (s)",
+        ]
+
+        shown = [
+            c for c in preferred
+            if c in comparison.columns
+        ]
+
+        st.dataframe(
+            comparison[shown]
+            if shown
+            else comparison,
+            width="stretch",
+            hide_index=True,
+        )
+
+    else:
+        st.info(
+            "Run `run_experiment.py` to generate "
+            "`model_comparison.csv`."
+        )
+
+    live = pd.DataFrame(
+        st.session_state.history
+    )
+
+    if not live.empty:
+
+        st.markdown(
+            "### Live MAE comparison"
+        )
+
+        st.plotly_chart(
+            plot_learning_chart(
+                live,
+                height=430,
+            ),
+            width="stretch",
+        )
+
+        st.markdown(
+            """
+            **MAE ↓** — average absolute prediction error  
+            **RMSE ↓** — penalizes large errors more strongly  
+            **R² ↑** — variance explained by the model
+            """
+        )
+
+
+# ============================================================
+# ADAPTATION & RECOVERY
+# ============================================================
+
+with tabs[3]:
+
+    inc = history_for("Incremental")
+
+    if inc.empty:
+
+        st.info(
+            "Run the live stream first."
+        )
+
+    else:
+
+        c1, c2, c3, c4 = st.columns(4)
+
+        c1.metric(
+            "NEW ALARMS",
+            int(inc["alarm"].astype(bool).sum()),
+        )
+
+        c2.metric(
+            "ADAPTATION WINDOWS",
+            int(inc["adapted"].astype(bool).sum()),
+        )
+
+        c3.metric(
+            "RECOVERY EVENTS",
+            int(inc["recovery"].astype(bool).sum()),
+        )
+
+        c4.metric(
+            "FINAL MAE",
+            f"{inc['mae'].iloc[-1]:.3f}",
+        )
+
+        st.plotly_chart(
+            add_event_lines_clean(
+                plot_learning_chart(
+                    pd.DataFrame(
+                        st.session_state.history
+                    ),
+                    400,
+                ),
+                st.session_state.events,
+                show_truth,
+            ),
+            width="stretch",
+        )
+
+        st.dataframe(
+            inc[
+                [
+                    c for c in [
+                        "window",
+                        "diagnosis",
+                        "alarm",
+                        "recovery",
+                        "adapted",
+                        "mae",
+                        "rmse",
+                        "r2",
+                        "updates_seen",
+                    ]
+                    if c in inc.columns
+                ]
+            ].tail(100),
+            width="stretch",
+            hide_index=True,
+        )
+
+
+# ============================================================
+# DETECTOR EVALUATION
+# ============================================================
+
+with tabs[4]:
+
+    summary = read_optional_csv(
+        "detector_metrics_summary.csv"
+    )
+
+    if summary is None or summary.empty:
+
+        st.info(
+            "Run `run_experiment.py` first to generate "
+            "detector evaluation metrics."
+        )
+
+    else:
+
+        st.subheader(
+            "Offline drift-detector evaluation"
+        )
+
+        st.dataframe(
+            summary,
+            width="stretch",
+            hide_index=True,
+        )
+
+        st.caption(
+            "Ground-truth drift labels are used only for offline "
+            "evaluation. They are never used by the live detector."
+        )
+
+        by_seed = read_optional_csv(
+            "detector_metrics_by_seed.csv"
+        )
+
+        if by_seed is not None and not by_seed.empty:
+
+            st.markdown(
+                "### Metrics by seed"
+            )
+
+            st.dataframe(
+                by_seed,
+                width="stretch",
+                hide_index=True,
+            )
+
+
+# ============================================================
+# EVENT LOG
+# ============================================================
+
+with tabs[5]:
+
+    inc = history_for("Incremental")
+
+    if inc.empty:
+
+        st.info(
+            "Run the live stream first."
+        )
+
+    else:
+
+        log_cols = [
+            c for c in [
+                "window",
+                "diagnosis",
+                "data_alarm",
+                "relational_alarm",
+                "alarm",
+                "adapted",
+                "recovery",
+                "worst_ks",
+                "worst_psi",
+                "ph_stat",
+                "mean_resid",
+                "features_moved",
+            ]
+            if c in inc.columns
+        ]
+
+        st.dataframe(
+            inc[log_cols].tail(250),
+            width="stretch",
+            hide_index=True,
+        )
+
+
+# ============================================================
+# ONE-WINDOW LIVE EXECUTION
+# ============================================================
+#
+# IMPORTANT:
+# We process exactly one window per rerun. This makes Plotly charts
+# visibly update in the browser instead of waiting for the full stream.
+
+if st.session_state.stream_running:
+
+    runner = st.session_state.live_runner
+    data = st.session_state.stream_df
+
+    if runner is not None and st.session_state.stream_index < len(
+        runner.windows
+    ):
+
+        i = st.session_state.stream_index
+        s, e = runner.windows[i]
+
+        batch = runner.step(s, e)
+
+        for strategy, row in batch.items():
+
+            saved = dict(row)
+            saved["strategy"] = strategy
+            st.session_state.history.append(saved)
+
+        # Detector events come from the Incremental stream only.
+        primary = batch["Incremental"]
+
+        if primary["alarm"]:
+
+            st.session_state.events.append(
+                {
+                    "window": int(primary["window"]),
+                    "type": "alarm",
+                }
+            )
+
+        if primary["adapted"]:
+
+            st.session_state.events.append(
+                {
+                    "window": int(primary["window"]),
+                    "type": "adapt",
+                }
+            )
+
+        # Ground truth is only used to draw an optional answer-key line.
+        if show_truth:
+
+            truth_events = build_truth_events(data)
+
+            for event in truth_events:
+
+                if (
+                    event["window"] == primary["window"]
+                    and not any(
+                        e["type"] == "truth"
+                        and e["window"] == event["window"]
+                        for e in st.session_state.events
+                    )
+                ):
+
+                    st.session_state.events.append(event)
+
+        st.session_state.stream_index += 1
+
+        if st.session_state.stream_index >= len(
+            runner.windows
+        ):
+
+            st.session_state.stream_running = False
+            st.session_state.stream_finished = True
+
+        else:
+
+            # Re-run immediately after the current chart has been built.
+            # The next rerun receives the next window and redraws the
+            # charts with one more point.
+            time.sleep(
+                max(
+                    0.05,
+                    float(delay),
+                )
+            )
+
+            st.rerun()
+
+    else:
+
+        st.session_state.stream_running = False
+        st.session_state.stream_finished = True
+
+
+if st.session_state.stream_finished:
+
+    st.success(
+        "✓ Live stream completed. "
+        "Use the tabs above to inspect drift, model performance, "
+        "adaptation/recovery, detector evaluation, and the event log."
     )
