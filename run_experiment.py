@@ -205,6 +205,17 @@ def main():
         .rename(columns={"strategy": "Strategy"})
     )
 
+    strategy_order = {
+        name: i
+        for i, name in enumerate(STRATEGY_NAMES)
+    }
+    comparison["_order"] = comparison["Strategy"].map(strategy_order)
+    comparison = (
+        comparison
+        .sort_values("_order")
+        .drop(columns="_order")
+    )
+
     comparison.to_csv(
         "model_comparison.csv",
         index=False,
