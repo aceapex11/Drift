@@ -1042,6 +1042,13 @@ with tabs[4]:
             "Offline drift-detector evaluation"
         )
 
+        st.caption(
+            "Primary metric is event-level detection: one alarm is matched "
+            "to a true drift episode if it occurs during that episode or "
+            "within the allowed delay. This avoids penalising a detector "
+            "for not raising a new alarm on every window of a long drift."
+        )
+
         st.dataframe(
             summary,
             width="stretch",
@@ -1050,7 +1057,9 @@ with tabs[4]:
 
         st.caption(
             "Ground-truth drift labels are used only for offline "
-            "evaluation. They are never used by the live detector."
+            "evaluation. They are never used by the live detector. "
+            "TN/Accuracy are intentionally not headline metrics for "
+            "event-based drift detection."
         )
 
         by_seed = read_optional_csv(
@@ -1058,16 +1067,26 @@ with tabs[4]:
         )
 
         if by_seed is not None and not by_seed.empty:
+            # The detector itself is deterministic for a fixed stream, so
+            # the seed table is retained only as an audit view.
+            with st.expander("Detailed detector results by seed"):
+                st.dataframe(
+                    by_seed,
+                    width="stretch",
+                    hide_index=True,
+                )
 
-            st.markdown(
-                "### Metrics by seed"
-            )
+        window_metrics = read_optional_csv(
+            "detector_window_metrics_by_seed.csv"
+        )
 
-            st.dataframe(
-                by_seed,
-                width="stretch",
-                hide_index=True,
-            )
+        if window_metrics is not None and not window_metrics.empty:
+            with st.expander("Legacy window-level metrics (diagnostic only)"):
+                st.dataframe(
+                    window_metrics,
+                    width="stretch",
+                    hide_index=True,
+                )
 
 
 # ============================================================
