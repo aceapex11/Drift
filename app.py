@@ -1,5 +1,6 @@
 """
 Streamlit frontend for the existing live drift-detection project.
+
 Run:
     streamlit run app.py
 
@@ -406,6 +407,74 @@ with tabs[4]:
 
 with tabs[5]:
     log_slot = st.empty()
+
+
+
+# ============================================================
+# LIVE-ONLY RENDER
+# ============================================================
+# Keep the streaming loop lightweight.  Rendering every tab and every
+# Plotly chart 76 times makes Streamlit Cloud look frozen.  During the
+# stream we update only the live KPIs and live MAE chart.  The full
+# analytical dashboard is rendered once the stream finishes.
+
+def render_live_dashboard():
+    d = get_history_df()
+    if d.empty:
+        return
+
+    events = st.session_state.events
+    last = st.session_state.history[-1]
+
+    diagnosis = str(last.get("diagnosis", "none")).upper()
+
+    metric_slots[0].metric("CURRENT WINDOW", int(last["window"]) + 1)
+    metric_slots[1].metric("DIAGNOSIS", diagnosis)
+    metric_slots[2].metric("STATIC MAE", f'{float(last["mae_static"]):.2f}')
+
+    delta = float(last["mae"]) - float(last["mae_static"])
+    metric_slots[3].metric(
+        "TRANSFER MAE",
+        f'{float(last["mae"]):.2f}',
+        f"{delta:+.2f} vs static",
+        delta_color="inverse",
+    )
+
+    alarms_now = sum(1 for e in events if e.get("type") == "alarm")
+    adaptations_now = sum(1 for e in events if e.get("type") == "adapt")
+    metric_slots[4].metric("DETECTED ALARMS", alarms_now)
+    metric_slots[5].metric("ADAPTATION EVENTS", adaptations_now)
+
+    fig = make_fig("Live model error · lower is better", "MAE", 390)
+    fig.add_trace(
+        go.Scatter(
+            x=d["window"],
+            y=d["mae_static"],
+            mode="lines+markers",
+            name="Static — no adaptation",
+            line=dict(color=COLORS["static"], width=2.5),
+            marker=dict(size=4),
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=d["window"],
+            y=d["mae"],
+            mode="lines+markers",
+            name="Transfer learning",
+            line=dict(color=COLORS["transfer"], width=3),
+            marker=dict(size=4),
+        )
+    )
+    fig = add_regime_bands(fig, d, show_truth and "regime" in d.columns)
+    fig = add_event_lines(fig, events, show_truth)
+
+    # One stable key is safe because the placeholder is replaced in-place.
+    live_mae_slot.plotly_chart(
+        fig,
+        width="stretch",
+        key="live_stream_mae",
+    )
 
 
 # ============================================================
@@ -1040,11 +1109,10 @@ if start:
                 }
             )
 
-        # Redraw every window so the dashboard is genuinely live.
-        if True:
-            render_dashboard()
+        # Keep the live stream lightweight: update only the live monitor.
+        render_live_dashboard()
 
-            progress.progress(
+        progress.progress(
                 (i + 1) / len(windows),
                 text=f"Streaming window {i + 1}/{len(windows)}",
             )
@@ -1052,6 +1120,9 @@ if start:
         time.sleep(delay)
 
     progress.empty()
+
+    # Render all analytical tabs once after the stream has completed.
+    render_dashboard()
     st.success("Stream finished.")
 
 elif st.session_state.history:
