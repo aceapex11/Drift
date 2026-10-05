@@ -28,9 +28,11 @@ from sklearn.preprocessing import PolynomialFeatures, StandardScaler
 
 from data_generator import FEATURES, MONITORED, TARGET
 
-KS_FLOOR = 0.15
-PSI_THRESHOLD = 0.25
-PH_PARAMS = dict(min_instances=100, delta=1.0, threshold=100.0, alpha=0.9999)
+# Moderate detector thresholds. These are deliberately exposed as constants so they
+# can be tuned offline without changing the live detection logic.
+KS_FLOOR = 0.10
+PSI_THRESHOLD = 0.15
+PH_PARAMS = dict(min_instances=100, delta=0.5, threshold=50.0, alpha=0.9999)
 
 RESID_CLIP = 4.0
 RULE_BACK = 1.25
@@ -418,9 +420,13 @@ class SGDStreamEngine:
             for f, j in zip(MONITORED, self.mon_idx)
         }
 
+        # Data drift is signalled when either KS or PSI shows a meaningful
+        # change for at least one monitored feature. PSI was previously
+        # calculated only for display; it now participates in detection.
         raw_data = any(
-            value > self.ks_thr[f]
-            for f, value in ks.items()
+            (ks[f] > self.ks_thr[f])
+            or (psis[f] > PSI_THRESHOLD)
+            for f in MONITORED
         )
 
         data_alarm = raw_data and not self.data_latched
