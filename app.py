@@ -6,9 +6,9 @@ Run:
 
 IMPORTANT:
 - data_generator.py is unchanged
-- drift_engine.py is unchanged
-- The existing DualRunner / StreamEngine / TransferGBR interfaces are unchanged.
-- This file only improves the presentation layer.
+- drift_engine.py provides SGD incremental/continual learning.
+- There is no TransferGBR or transfer-learning dependency.
+- The live dashboard uses StrategyRunner.
 """
 
 import time
@@ -128,12 +128,11 @@ st.caption(
 
 
 # ============================================================
-# DATA PIPELINE
+# DATA LOADING
 # ============================================================
 
 @st.cache_data(show_spinner="Generating synthetic stream data…")
 def load_data():
-    """Load/generate the project's synthetic stream using data_generator.py."""
     return generate()
 
 
@@ -838,41 +837,86 @@ with tabs[2]:
         "model_comparison.csv"
     )
 
-    if comparison is not None and not comparison.empty:
+    expected_strategies = [
+        "Static",
+        "Full retraining",
+        "Incremental",
+        "Continual + replay(100)",
+        "Continual + replay(500)",
+    ]
 
-        st.subheader(
-            "Offline learning-strategy comparison"
-        )
+    if comparison is None or comparison.empty:
 
-        preferred = [
-            "Model",
-            "Strategy",
-            "Method",
-            "MAE",
-            "RMSE",
-            "R2",
-            "R²",
-            "Training time (s)",
-        ]
-
-        shown = [
-            c for c in preferred
-            if c in comparison.columns
-        ]
-
-        st.dataframe(
-            comparison[shown]
-            if shown
-            else comparison,
-            width="stretch",
-            hide_index=True,
+        st.info(
+            "Run `run_experiment.py` to generate the current "
+            "five-strategy `model_comparison.csv`."
         )
 
     else:
-        st.info(
-            "Run `run_experiment.py` to generate "
-            "`model_comparison.csv`."
+
+        # Never display legacy results such as Transfer learning.
+        # Also refuse to display an incomplete comparison, because that
+        # could make an old CSV look like a valid current experiment.
+        available = set(
+            comparison.get("Strategy", pd.Series(dtype=str))
+            .astype(str)
+            .tolist()
         )
+
+        missing = [
+            name
+            for name in expected_strategies
+            if name not in available
+        ]
+
+        if missing:
+            st.warning(
+                "The existing `model_comparison.csv` is outdated or "
+                "incomplete. It is not being displayed. Run "
+                "`python run_experiment.py` to regenerate the results "
+                "with Incremental SGD and Continual Replay (100/500)."
+            )
+        else:
+            comparison = comparison[
+                comparison["Strategy"].isin(expected_strategies)
+            ].copy()
+
+            order = {
+                name: i
+                for i, name in enumerate(expected_strategies)
+            }
+            comparison["_order"] = comparison["Strategy"].map(order)
+            comparison = (
+                comparison
+                .sort_values("_order")
+                .drop(columns="_order")
+            )
+
+            st.subheader(
+                "Offline learning-strategy comparison"
+            )
+
+            shown = [
+                "Strategy",
+                "MAE",
+                "RMSE",
+                "R2",
+                "Windows",
+            ]
+
+            st.dataframe(
+                comparison[
+                    [c for c in shown if c in comparison.columns]
+                ],
+                width="stretch",
+                hide_index=True,
+            )
+
+            st.caption(
+                "Lower MAE/RMSE is better; higher R² is better. "
+                "Transfer learning / fine-tuning is not part of the "
+                "current experiment."
+            )
 
     live = pd.DataFrame(
         st.session_state.history
