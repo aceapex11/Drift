@@ -4,9 +4,8 @@ Streamlit dashboard for the live drift-detection project.
 Run:
     streamlit run app.py
 
-Backend files are intentionally unchanged:
-    data_generator.py
-    drift_engine.py
+Backend: current data_generator.py + drift_engine_incremental.py
+The predictor is SGDRegressor with incremental/continual adaptation.
 """
 
 import time
@@ -19,7 +18,7 @@ from plotly.subplots import make_subplots
 import streamlit as st
 
 from data_generator import generate, TRAIN_END, WINDOW
-from drift_engine import DualRunner, StreamEngine, TransferGBR, make_windows
+from drift_engine_incremental import DualRunner, SGDStreamEngine, make_windows
 
 
 # ============================================================
@@ -40,7 +39,7 @@ COLORS = {
     "text": "#172033",
     "muted": "#64748B",
     "static": "#64748B",
-    "transfer": "#16A34A",
+    "incremental": "#16A34A",
     "data": "#0284C7",
     "relational": "#7C3AED",
     "alarm": "#D97706",
@@ -99,7 +98,7 @@ st.title("◈ Live Drift Intelligence")
 st.caption(
     "Predict → Detect → Diagnose → Adapt → Recover  |  "
     "KS / PSI data drift  •  Page-Hinkley relational drift  •  "
-    "Transfer-learning adaptation"
+    "SGD incremental / continual adaptation"
 )
 
 
@@ -110,10 +109,7 @@ st.caption(
 @st.cache_resource(show_spinner="Generating data and pre-training the source model…")
 def load_assets():
     df = generate()
-    pretrained = StreamEngine(
-        df, TRAIN_END, WINDOW, TransferGBR, 0
-    ).model
-    return df, pretrained
+    return df, None
 
 
 # ============================================================
@@ -288,7 +284,7 @@ with st.sidebar:
     st.markdown(
         """
         **1. Predict**  
-        Transfer-learning model
+        Incremental SGD model
 
         **2. Detect**  
         KS / PSI + Page-Hinkley
@@ -297,7 +293,7 @@ with st.sidebar:
         DATA / RELATIONAL / BOTH
 
         **4. Adapt**  
-        Transfer-learning update
+        Incremental SGD update
 
         **5. Recover**  
         Monitor post-drift error
@@ -417,7 +413,7 @@ def render_dashboard():
     delta = float(last["mae"]) - float(last["mae_static"])
 
     metric_slots[3].metric(
-        "TRANSFER MAE",
+        "INCREMENTAL MAE",
         f'{float(last["mae"]):.2f}',
         f"{delta:+.2f} vs static",
         delta_color="inverse",
@@ -462,8 +458,8 @@ def render_dashboard():
             x=d["window"],
             y=d["mae"],
             mode="lines+markers",
-            name="Transfer learning",
-            line=dict(color=COLORS["transfer"], width=3),
+            name="Incremental SGD",
+            line=dict(color=COLORS["incremental"], width=3),
             marker=dict(size=4),
         )
     )
@@ -512,7 +508,7 @@ def render_dashboard():
                 x=d["window"],
                 y=d[predicted_col],
                 name="Predicted",
-                line=dict(color=COLORS["transfer"], width=2.5),
+                line=dict(color=COLORS["incremental"], width=2.5),
             )
         )
 
@@ -727,8 +723,8 @@ def render_dashboard():
         go.Scatter(
             x=d["window"],
             y=d["mae"],
-            name="Transfer learning",
-            line=dict(color=COLORS["transfer"], width=3),
+            name="Incremental SGD",
+            line=dict(color=COLORS["incremental"], width=3),
         )
     )
 
@@ -803,8 +799,8 @@ def render_dashboard():
         go.Scatter(
             x=d["window"],
             y=d["mae"],
-            name="Transfer learning",
-            line=dict(color=COLORS["transfer"], width=3),
+            name="Incremental SGD",
+            line=dict(color=COLORS["incremental"], width=3),
         )
     )
 
@@ -840,40 +836,45 @@ def render_dashboard():
 
     detector_slot.subheader("Detector event evaluation")
 
+    # Precision / recall / F1 / accuracy are for the BINARY DRIFT ALARM.
+    # They are offline metrics only; ground truth is never used by the live detector.
+    if show_truth and "true_drift_event" in d.columns:
+        y_true = d["true_drift_event"].astype(int)
+        y_pred = d["alarm"].astype(int)
+
+        from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
+        cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+        c1, c2, c3, c4 = detector_slot.columns(4)
+        c1.metric("Accuracy", f"{accuracy_score(y_true, y_pred):.3f}")
+        c2.metric("Precision", f"{precision_score(y_true, y_pred, zero_division=0):.3f}")
+        c3.metric("Recall", f"{recall_score(y_true, y_pred, zero_division=0):.3f}")
+        c4.metric("F1 Score", f"{f1_score(y_true, y_pred, zero_division=0):.3f}")
+
+        detector_slot.caption(
+            f"TP={cm[1,1]} · FP={cm[0,1]} · FN={cm[1,0]} · TN={cm[0,0]}. "
+            "These metrics evaluate drift-alarm detection, not regression prediction."
+        )
+    else:
+        detector_slot.info(
+            "Enable **Show simulated ground truth** to calculate offline "
+            "accuracy, precision, recall and F1 for the drift alarm. "
+            "The live detector never reads the ground-truth columns."
+        )
+
     worst_ks = float(d["worst_ks"].iloc[-1]) if "worst_ks" in d.columns else float("nan")
     mean_resid = float(d["mean_resid"].iloc[-1]) if "mean_resid" in d.columns else float("nan")
-
     detector_slot.caption(
-        f"Observed alarms: {alarm_count} · "
-        f"Recovery events: {recovery_count} · "
-        f"Worst KS: {worst_ks:.3f} · "
-        f"Relational signal: {mean_resid:.3f}"
+        f"Observed alarms: {alarm_count} · Recovery events: {recovery_count} · "
+        f"Worst KS: {worst_ks:.3f} · Relational signal: {mean_resid:.3f}"
     )
-
-    if show_truth and "truth_regime" in d.columns:
-        detector_slot.info(
-            "Ground truth is visible because the demo option is enabled. "
-            "The live detector does not use this field."
-        )
 
     detector_columns = [
         c for c in [
-            "window",
-            "diagnosis",
-            "alarm",
-            "recovery",
-            "worst_ks",
-            "mean_resid",
-            "truth_regime",
-        ]
-        if c in d.columns
+            "window", "diagnosis", "alarm", "recovery",
+            "worst_ks", "mean_resid", "true_drift_event", "truth_regime"
+        ] if c in d.columns
     ]
-
-    detector_slot.dataframe(
-        d[detector_columns].tail(100),
-        use_container_width=True,
-        hide_index=True,
-    )
+    detector_slot.dataframe(d[detector_columns].tail(100), use_container_width=True, hide_index=True)
 
     # ========================================================
     # EVENT LOG
@@ -916,13 +917,13 @@ def render_dashboard():
 # ============================================================
 
 if start:
-    df, pretrained = load_assets()
+    df, _ = load_assets()
 
     runner = DualRunner(
         df,
         TRAIN_END,
         WINDOW,
-        pretrained,
+        seed=0,
     )
 
     windows = list(
@@ -951,6 +952,11 @@ if start:
         )
 
         msg["truth_regime"] = truth
+        if "true_drift_point" in df.columns:
+            points = pd.to_numeric(df["true_drift_point"], errors="coerce").dropna().astype(int).to_numpy()
+            msg["true_drift_event"] = bool(np.any((points >= s) & (points < e)))
+        else:
+            msg["true_drift_event"] = False
         st.session_state.history.append(msg)
 
         # True regime transition — visualization/evaluation only.
