@@ -377,7 +377,7 @@ tabs = st.tabs(
 )
 
 with tabs[0]:
-    metric_cols = st.columns(5)
+    metric_cols = st.columns(6)
     metric_slots = [c.empty() for c in metric_cols]
 
     st.markdown('<div class="section-title">Live model behaviour</div>', unsafe_allow_html=True)
@@ -403,7 +403,6 @@ with tabs[3]:
     adaptation_slot = st.empty()
 
 with tabs[4]:
-    detector_kpis = st.columns(4)
     detector_slot = st.empty()
 
 with tabs[5]:
@@ -454,9 +453,17 @@ def render_dashboard():
         delta_color="inverse",
     )
 
+    alarms_now = sum(1 for e in events if e.get("type") == "alarm")
+    adaptations_now = sum(1 for e in events if e.get("type") == "adapt")
+
     metric_slots[4].metric(
-        "MODEL TREES",
-        last.get("n_trees", "—"),
+        "DETECTED ALARMS",
+        alarms_now,
+    )
+
+    metric_slots[5].metric(
+        "ADAPTATION EVENTS",
+        adaptations_now,
     )
 
     # --------------------------------------------------------
@@ -791,9 +798,6 @@ def render_dashboard():
             "RMSE",
             "R2",
             "R²",
-            "Precision",
-            "Recall",
-            "F1",
             "Training time (s)",
             "Recovery time",
         ]
@@ -813,81 +817,11 @@ def render_dashboard():
                 hide_index=True,
             )
 
-        # If classification metrics exist, visualize them rather than
-        # pretending regression has precision/recall/F1.
-        metric_candidates = [
-            c for c in ["Precision", "Recall", "F1", "F1 Score"]
-            if c in comparison.columns
-        ]
-
-        if metric_candidates:
-            model_col = next(
-                (
-                    c for c in ["Model", "Method", "Strategy"]
-                    if c in comparison.columns
-                ),
-                None,
-            )
-
-            if model_col:
-                metric_df = comparison[[model_col] + metric_candidates].copy()
-                metric_df = metric_df.melt(
-                    id_vars=model_col,
-                    var_name="Metric",
-                    value_name="Score",
-                )
-
-                fig = go.Figure()
-
-                for metric in metric_candidates:
-                    part = metric_df[metric_df["Metric"] == metric]
-
-                    fig.add_trace(
-                        go.Bar(
-                            x=part[model_col],
-                            y=part["Score"],
-                            name=metric,
-                        )
-                    )
-
-                fig.update_layout(
-                    title="Classification performance",
-                    barmode="group",
-                    template="plotly_white",
-                    paper_bgcolor=COLORS["panel"],
-                    plot_bgcolor=COLORS["panel"],
-                    font=dict(color=COLORS["text"]),
-                    height=360,
-                    yaxis=dict(
-                        title="Score",
-                        range=[0, 1],
-                        gridcolor=COLORS["grid"],
-                    ),
-                    xaxis=dict(
-                        title="Model",
-                        gridcolor=COLORS["grid"],
-                    ),
-                )
-
-                summary_slot.plotly_chart(
-                    fig,
-                    width="stretch",
-                    key=f"classification_summary_{render_id}",
-                )
-
     else:
         saved_slot.info(
             "model_comparison.csv was not found. "
             "The live comparison above is still available."
         )
-
-    st.caption(
-        "MAE is valid for the current regression output. "
-        "RMSE/R² require aligned predictions and targets; "
-        "Precision/Recall/F1 are shown only when a valid classification "
-        "result exists in the saved comparison."
-    )
-
 
     # ========================================================
     # ADAPTATION / RECOVERY
@@ -933,36 +867,22 @@ def render_dashboard():
         if e["type"] == "adapt"
     ]
 
-    c1, c2, c3 = st.columns(3)
-
-    c1.metric(
-        "Detected alarms",
-        len(alarms),
-    )
-
-    c2.metric(
-        "Adaptation events",
-        len(adaptations),
-    )
+    alarms = [e for e in events if e["type"] == "alarm"]
+    adaptations = [e for e in events if e["type"] == "adapt"]
 
     if alarms and adaptations:
         first_alarm = alarms[0]["window"]
         first_adapt = adaptations[0]["window"]
-
-        c3.metric(
-            "First adaptation delay",
-            f"{max(0, first_adapt - first_alarm)} windows",
-        )
+        delay_windows = max(0, first_adapt - first_alarm)
+        delay_text = f"{delay_windows} windows"
     else:
-        c3.metric(
-            "First adaptation delay",
-            "—",
-        )
+        delay_text = "—"
 
-    adaptation_slot.caption(
-        "Recovery metrics are based only on events and metrics exposed by "
-        "the existing engine; no unsupported recovery values are fabricated."
+    adaptation_slot.info(
+        f"**Adaptation status:** {len(adaptations)} adaptation events · "
+        f"{len(alarms)} detected alarms · **first adaptation delay:** {delay_text}."
     )
+
 
 
     # ========================================================
@@ -972,27 +892,12 @@ def render_dashboard():
     alarm_count = int(d["alarm"].fillna(False).sum()) if "alarm" in d else 0
     recovery_count = int(d["recovery"].fillna(False).sum()) if "recovery" in d else 0
 
-    detector_kpis[0].metric(
-        "Observed alarms",
-        alarm_count,
-    )
-
-    detector_kpis[1].metric(
-        "Recovery events",
-        recovery_count,
-    )
-
-    detector_kpis[2].metric(
-        "Data signal",
-        f'{float(d["worst_ks"].iloc[-1]):.3f}',
-    )
-
-    detector_kpis[3].metric(
-        "Relational signal",
-        f'{float(d["mean_resid"].iloc[-1]):.3f}',
-    )
-
     detector_slot.subheader("Detector event evaluation")
+    detector_slot.caption(
+        f"Observed alarms: {alarm_count} · Recovery events: {recovery_count} · "
+        f"Worst KS: {float(d["worst_ks"].iloc[-1]):.3f} · "
+        f"Relational signal: {float(d["mean_resid"].iloc[-1]):.3f}"
+    )
 
     if show_truth and "truth_regime" in d.columns:
         detector_slot.info(
@@ -1018,14 +923,6 @@ def render_dashboard():
         width="stretch",
         hide_index=True,
     )
-
-    detector_slot.caption(
-        "Precision/Recall/F1 for drift detection require an explicit event "
-        "matching rule (for example, how many windows after a true drift "
-        "count as a successful detection). The dashboard therefore does "
-        "not invent those scores."
-    )
-
 
     # ========================================================
     # EVENT LOG
