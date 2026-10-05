@@ -128,16 +128,13 @@ st.caption(
 
 
 # ============================================================
-# EXISTING MODEL / DATA PIPELINE — UNCHANGED
+# DATA PIPELINE
 # ============================================================
 
-@st.cache_resource(show_spinner="Generating data and pre-training the source model…")
-def load_assets():
-    df = generate()
-    pretrained = StreamEngine(
-        df, TRAIN_END, WINDOW, TransferGBR, 0
-    ).model
-    return df, pretrained
+@st.cache_data(show_spinner="Generating synthetic stream data…")
+def load_data():
+    """Load/generate the project's synthetic stream using data_generator.py."""
+    return generate()
 
 
 # ============================================================
@@ -343,23 +340,6 @@ with st.sidebar:
         "Static, Incremental SGD, and Continual Learning with Replay(100/500). "
         "Ground truth is used only for evaluation/visualization."
     )
-
-
-# ============================================================
-# SESSION STATE
-# ============================================================
-
-if "history" not in st.session_state:
-    st.session_state.history = []
-
-if "events" not in st.session_state:
-    st.session_state.events = []
-
-
-if start:
-    st.session_state.history = []
-    st.session_state.events = []
-
 
 
 # ============================================================
