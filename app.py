@@ -688,68 +688,6 @@ with tab_analysis:
             """, unsafe_allow_html=True
         )
 
-    # ---------------- Detector evaluation ----------------
-    st.markdown('<div class="section-title">Drift detector performance</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-note">Event-level scoring treats each contiguous drift episode as one detection target.</div>', unsafe_allow_html=True)
-
-    if summary is None or summary.empty:
-        st.info("Run `run_experiment.py` to generate detector evaluation metrics.")
-    else:
-        sm = summary.set_index("Metric")["Mean"].to_dict()
-        precision = float(sm.get("Precision", float("nan")))
-        recall = float(sm.get("Recall", float("nan")))
-        f1 = float(sm.get("F1", float("nan")))
-        episodes = int(sm.get("True drift episodes", 0))
-        matched = int(sm.get("Matched detections", 0))
-        alarms = int(sm.get("Detected alarms", 0))
-        fp = int(sm.get("FP", 0))
-        delay = float(sm.get("Mean detection delay (windows)", float("nan")))
-
-        quality = "Strong" if f1 >= .80 else ("Moderate" if f1 >= .60 else "Needs tuning")
-        quality_cls = "good" if f1 >= .80 else "blue"
-
-        st.markdown(
-            f"""
-            <div class="quality-banner">
-                <div><div class="quality-main">Detector quality · {quality}</div>
-                <div class="quality-sub">{matched}/{episodes} true drift episodes matched · {fp} unmatched alarms · mean delay {delay:.2f} windows</div></div>
-                <div class="quality-score">F1 {f1:.3f}</div>
-            </div>
-            """, unsafe_allow_html=True
-        )
-
-        detector_cards = [
-            ("Precision", f"{precision:.0%}", "Alarms correctly matched", "good"),
-            ("Recall", f"{recall:.0%}", "True episodes detected", "good"),
-            ("F1 score", f"{f1:.3f}", "Precision / recall balance", quality_cls),
-            ("True episodes", str(episodes), "Offline ground truth", ""),
-            ("Detected alarms", str(alarms), "Live detector outputs", ""),
-            ("Mean delay", f"{delay:.2f}", "Stream windows", ""),
-        ]
-        cards_html = '<div class="kpi-grid" style="grid-template-columns:repeat(6,minmax(0,1fr));">'
-        for label, value, help_text, cls in detector_cards:
-            cards_html += f'<div class="kpi-card {cls}"><div class="kpi-label">{label}</div><div class="kpi-value">{value}</div><div class="kpi-help">{help_text}</div></div>'
-        cards_html += '</div>'
-        st.markdown(cards_html, unsafe_allow_html=True)
-
-        st.markdown(
-            f"""<div class="method-card"><b>Evaluation protocol.</b> An alarm is counted as a correct detection when it occurs inside a true drift episode or within the allowed <b>2-window detection delay</b>. The live detector never reads <code>regime</code>, <code>data_drift</code>, <code>concept_drift</code>, or <code>true_drift_point</code>. <b>{matched}/{episodes}</b> episodes were matched from <b>{alarms}</b> emitted alarms.</div>""",
-            unsafe_allow_html=True,
-        )
-
-        by_seed = read_optional_csv("detector_metrics_by_seed.csv")
-        window_metrics = read_optional_csv("detector_window_metrics_by_seed.csv")
-
-        if by_seed is not None and not by_seed.empty:
-            with st.expander("Technical audit · detector results by seed"):
-                cols = [c for c in ["Seed", "Precision", "Recall", "F1", "TP", "FP", "FN", "True drift episodes", "Detected alarms", "Matched detections", "Mean detection delay (windows)"] if c in by_seed.columns]
-                st.dataframe(by_seed[cols], width="stretch", hide_index=True)
-
-        if window_metrics is not None and not window_metrics.empty:
-            with st.expander("Technical audit · legacy window-level metrics"):
-                st.caption("Diagnostic only. These metrics are retained for auditability and are not the headline event-level detector score.")
-                st.dataframe(window_metrics, width="stretch", hide_index=True)
-
     # ---------------- Recent evidence ----------------
     st.markdown('<div class="section-title">Recent live detector evidence</div>', unsafe_allow_html=True)
     st.markdown('<div class="section-note">Latest detector outputs from the live stream. Ground truth is intentionally absent.</div>', unsafe_allow_html=True)
