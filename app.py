@@ -696,9 +696,25 @@ with tab_analysis:
         st.info("Run the live stream to populate detector evidence.")
     else:
         log_cols = [c for c in ["window", "diagnosis", "data_alarm", "relational_alarm", "alarm", "adapted", "recovery", "worst_ks", "worst_psi", "ph_stat", "features_moved"] if c in inc.columns]
-        recent = inc[log_cols].tail(10).copy()
-        recent["window"] = recent["window"].astype(int) + 1
-        st.dataframe(recent, width="stretch", hide_index=True)
+        evidence = inc[log_cols].copy().sort_values("window")
+        evidence["window"] = evidence["window"].astype(int) + 1
+        st.caption(f"Showing all {len(evidence)} stream windows. Scroll vertically and horizontally to inspect the complete detector history.")
+        st.dataframe(
+            evidence,
+            width="stretch",
+            height=460,
+            hide_index=True,
+            column_config={
+                "data_alarm": st.column_config.CheckboxColumn("Data alarm"),
+                "relational_alarm": st.column_config.CheckboxColumn("Relational alarm"),
+                "alarm": st.column_config.CheckboxColumn("Alarm"),
+                "adapted": st.column_config.CheckboxColumn("Adapted"),
+                "recovery": st.column_config.CheckboxColumn("Recovery"),
+                "worst_ks": st.column_config.NumberColumn("Worst KS", format="%.4f"),
+                "worst_psi": st.column_config.NumberColumn("Worst PSI", format="%.4f"),
+                "ph_stat": st.column_config.NumberColumn("Page-Hinkley", format="%.4f"),
+            },
+        )
 # ============================================================
 # ONE-WINDOW LIVE EXECUTION
 # ============================================================
