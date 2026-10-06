@@ -73,63 +73,134 @@ STRATEGY_COLORS = {
 st.markdown(
     """
     <style>
-        .stApp { background: #F4F7FB; color: #172033; }
+        /* ---------- Global light enterprise theme ---------- */
+        :root {
+            --bg: #F5F7FB;
+            --surface: #FFFFFF;
+            --surface-2: #F8FAFD;
+            --line: #E5EAF2;
+            --text: #12213F;
+            --muted: #667085;
+            --blue: #2563EB;
+            --blue-soft: #EAF2FF;
+            --green: #0F9D72;
+            --green-soft: #E8F8F2;
+            --amber: #C77700;
+            --amber-soft: #FFF5E6;
+            --red: #D64545;
+            --red-soft: #FDEEEE;
+        }
+
+        .stApp { background: var(--bg); color: var(--text); }
+        .main .block-container { max-width: 1500px; padding: 1.2rem 2rem 3rem; }
         [data-testid="stSidebar"] {
             background: #FFFFFF;
-            border-right: 1px solid #E2E8F0;
+            border-right: 1px solid var(--line);
         }
-        [data-testid="stSidebar"] * { color: #172033; }
-        [data-testid="stHeader"] { background: #FFFFFF; }
-        [data-testid="stToolbar"] { background: #FFFFFF; }
-        [data-testid="stMetric"] {
-            background: #FFFFFF;
-            border: 1px solid #E2E8F0;
-            border-radius: 12px;
-            padding: 12px 14px;
+        [data-testid="stSidebar"] * { color: var(--text); }
+        [data-testid="stHeader"] { background: rgba(255,255,255,.94); border-bottom: 1px solid var(--line); }
+        [data-testid="stToolbar"] { background: transparent; }
+
+        /* Hide the default Streamlit decoration that makes the app feel like a demo. */
+        #MainMenu { visibility: hidden; }
+        footer { visibility: hidden; }
+
+        /* ---------- Brand / hero ---------- */
+        .brand-row { display:flex; align-items:center; gap:12px; margin:4px 0 22px; }
+        .brand-mark {
+            width:40px; height:40px; border-radius:11px; display:flex; align-items:center; justify-content:center;
+            background:linear-gradient(135deg,#EAF2FF,#DCEAFF); border:1px solid #CFE0FF; color:#2563EB;
+            font-size:18px; font-weight:800; box-shadow:0 4px 12px rgba(37,99,235,.08);
         }
-        [data-testid="stMetricLabel"] {
-            color: #64748B;
-            font-size: 0.78rem;
-            font-weight: 650;
-        }
-        [data-testid="stMetricValue"] {
-            color: #172033;
-            font-size: 1.45rem;
-        }
+        .brand-name { font-size:1.02rem; font-weight:780; letter-spacing:-.02em; color:#10254B; }
+        .brand-caption { color:#7A879C; font-size:.70rem; margin-top:1px; }
         .hero {
-            background: linear-gradient(135deg, #FFFFFF 0%, #F8FAFC 100%);
-            border: 1px solid #E2E8F0;
-            border-radius: 16px;
-            padding: 20px 24px;
-            margin-bottom: 14px;
+            background:linear-gradient(105deg,#FFFFFF 0%,#F7FAFF 100%);
+            border:1px solid var(--line); border-radius:18px; padding:22px 26px; margin-bottom:18px;
+            box-shadow:0 6px 22px rgba(16,33,63,.035);
         }
-        .hero-title {
-            font-size: 1.65rem;
-            font-weight: 760;
-            color: #172033;
-            margin-bottom: 3px;
+        .hero-eyebrow { color:#2563EB; font-size:.70rem; font-weight:800; letter-spacing:.12em; text-transform:uppercase; margin-bottom:6px; }
+        .hero-title { font-size:1.75rem; line-height:1.15; font-weight:800; letter-spacing:-.035em; color:#10254B; margin-bottom:6px; }
+        .hero-subtitle { color:#667085; font-size:.88rem; line-height:1.5; }
+        .status-pill {
+            display:inline-flex; align-items:center; gap:7px; margin-top:12px; padding:5px 10px; border-radius:999px;
+            background:#ECFDF3; border:1px solid #CDEEDC; color:#087A57; font-size:.70rem; font-weight:750;
         }
-        .hero-subtitle {
-            color: #64748B;
-            font-size: 0.9rem;
-        }
-        .section-title {
-            font-size: 1.02rem;
-            font-weight: 720;
-            color: #172033;
-            margin: 1rem 0 0.35rem 0;
-        }
-        .section-note {
-            color: #64748B;
-            font-size: 0.82rem;
-            margin-bottom: 0.45rem;
-        }
+        .status-dot { width:7px; height:7px; border-radius:50%; background:#10B981; box-shadow:0 0 0 3px #D9F8EA; }
+
+        /* ---------- Navigation ---------- */
+        div[data-testid="stTabs"] { margin-top:0; }
         div[data-testid="stTabs"] button {
-            font-weight: 680;
+            font-weight:720; color:#667085; font-size:.82rem; padding:9px 14px;
         }
-        .stButton > button {
-            border-radius: 9px;
-            font-weight: 650;
+        div[data-testid="stTabs"] button[aria-selected="true"] { color:#2563EB; }
+        div[data-testid="stTabs"] [data-baseweb="tab-highlight"] { background:#2563EB; height:2px; }
+
+        /* ---------- KPI cards ---------- */
+        [data-testid="stMetric"] {
+            background:#FFFFFF; border:1px solid var(--line); border-radius:14px; padding:13px 15px;
+            box-shadow:0 4px 14px rgba(16,33,63,.025); min-height:82px;
+        }
+        [data-testid="stMetricLabel"] { color:#7A879C; font-size:.68rem; font-weight:800; letter-spacing:.045em; text-transform:uppercase; }
+        [data-testid="stMetricValue"] { color:#12213F; font-size:1.32rem; font-weight:790; letter-spacing:-.02em; }
+        [data-testid="stMetricDelta"] { font-size:.70rem; }
+        .section-title { color:#12213F; font-size:1.02rem; font-weight:780; letter-spacing:-.01em; margin:1.2rem 0 .18rem; }
+        .section-note { color:#7A879C; font-size:.77rem; margin-bottom:.6rem; }
+        .eyebrow { color:#2563EB; font-size:.67rem; font-weight:800; letter-spacing:.12em; text-transform:uppercase; margin-bottom:.3rem; }
+
+        /* ---------- Analysis page ---------- */
+        .analysis-head {
+            display:flex; justify-content:space-between; align-items:flex-start; gap:20px;
+            background:#FFFFFF; border:1px solid var(--line); border-radius:18px; padding:20px 22px;
+            box-shadow:0 6px 22px rgba(16,33,63,.035); margin-bottom:16px;
+        }
+        .analysis-title { font-size:1.48rem; font-weight:800; letter-spacing:-.03em; color:#10254B; }
+        .analysis-subtitle { color:#667085; font-size:.80rem; line-height:1.45; margin-top:4px; max-width:780px; }
+        .head-meta { display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
+        .meta-chip { background:#F7F9FC; border:1px solid var(--line); color:#526174; border-radius:9px; padding:7px 10px; font-size:.68rem; font-weight:700; white-space:nowrap; }
+        .meta-chip b { color:#12213F; }
+        .kpi-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin:8px 0 14px; }
+        .kpi-card { background:#FFFFFF; border:1px solid var(--line); border-radius:14px; padding:14px 15px; min-height:86px; box-shadow:0 4px 14px rgba(16,33,63,.025); }
+        .kpi-card.good { background:linear-gradient(180deg,#FFFFFF,#F7FCFA); border-color:#D7EEE5; }
+        .kpi-card.blue { background:linear-gradient(180deg,#FFFFFF,#F7FAFF); border-color:#DCE8FF; }
+        .kpi-label { color:#7A879C; font-size:.66rem; font-weight:800; text-transform:uppercase; letter-spacing:.07em; }
+        .kpi-value { color:#12213F; font-size:1.35rem; line-height:1.15; font-weight:800; margin-top:5px; letter-spacing:-.025em; }
+        .kpi-help { color:#8A96A8; font-size:.68rem; margin-top:4px; }
+        .panel { background:#FFFFFF; border:1px solid var(--line); border-radius:16px; padding:15px 16px; box-shadow:0 5px 18px rgba(16,33,63,.028); }
+        .panel-title { color:#12213F; font-size:.92rem; font-weight:780; }
+        .panel-sub { color:#7A879C; font-size:.70rem; margin-top:2px; margin-bottom:9px; }
+        .method-card { background:#F8FAFD; border:1px solid var(--line); border-radius:12px; padding:12px 14px; color:#526174; font-size:.72rem; line-height:1.5; margin:10px 0 4px; }
+        .method-card b { color:#12213F; }
+        .quality-banner {
+            display:flex; align-items:center; justify-content:space-between; gap:12px; padding:11px 14px;
+            background:#F0FBF6; border:1px solid #D4EFE3; border-radius:12px; color:#0A7755; margin:10px 0 14px;
+        }
+        .quality-main { font-size:.78rem; font-weight:800; }
+        .quality-sub { font-size:.68rem; color:#5C8778; margin-top:2px; }
+        .quality-score { font-size:1.05rem; font-weight:850; }
+
+        /* ---------- Tables ---------- */
+        .pro-table { width:100%; border-collapse:separate; border-spacing:0; overflow:hidden; border:1px solid var(--line); border-radius:12px; background:#fff; font-size:.73rem; }
+        .pro-table th { text-align:left; color:#718096; font-size:.65rem; font-weight:800; text-transform:uppercase; letter-spacing:.05em; background:#F8FAFD; padding:10px 12px; border-bottom:1px solid var(--line); }
+        .pro-table td { padding:10px 12px; border-bottom:1px solid #EEF1F5; color:#344054; }
+        .pro-table tr:last-child td { border-bottom:0; }
+        .pro-table tr.best td { background:#F2F8FF; color:#10254B; font-weight:720; }
+        .best-tag { display:inline-block; margin-left:6px; padding:2px 6px; border-radius:999px; background:#E8F1FF; color:#2563EB; font-size:.58rem; font-weight:800; }
+        .metric-good { color:#087A57; font-weight:800; }
+        .metric-neutral { color:#344054; }
+
+        /* ---------- Buttons / expanders ---------- */
+        .stButton > button { border-radius:10px; font-weight:750; border:1px solid #DCE3EE; }
+        .stButton > button[kind="primary"] { background:#2563EB; border-color:#2563EB; }
+        [data-testid="stExpander"] { border:1px solid var(--line); border-radius:12px; background:#FFFFFF; }
+        [data-testid="stExpanderToggleIcon"] { color:#667085; }
+        .stAlert { border-radius:12px; }
+
+        @media (max-width: 900px) {
+            .main .block-container { padding:1rem; }
+            .analysis-head { flex-direction:column; }
+            .head-meta { justify-content:flex-start; }
+            .kpi-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
         }
     </style>
     """,
@@ -138,14 +209,21 @@ st.markdown(
 
 st.markdown(
     """
-    <div class="hero">
-        <div class="hero-title">◈ Live Drift Intelligence</div>
-        <div class="hero-subtitle">
-            Predict → Detect → Diagnose → Adapt → Recover
-            &nbsp;·&nbsp; KS / PSI data drift
-            &nbsp;·&nbsp; Page-Hinkley relational drift
-            &nbsp;·&nbsp; Incremental & continual learning
+    <div class="brand-row">
+        <div class="brand-mark">↗</div>
+        <div>
+            <div class="brand-name">Live Drift Intelligence</div>
+            <div class="brand-caption">Industrial ML monitoring & adaptive learning</div>
         </div>
+    </div>
+    <div class="hero">
+        <div class="hero-eyebrow">Industrial predictive maintenance · research console</div>
+        <div class="hero-title">Live Drift Intelligence</div>
+        <div class="hero-subtitle">
+            A streaming regression system for detecting distribution and relational drift, diagnosing the change,
+            and adapting the learner without exposing ground-truth labels to the live detector.
+        </div>
+        <div class="status-pill"><span class="status-dot"></span> Live monitoring architecture ready</div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -377,34 +455,57 @@ def plot_drift_signals(d, height=330):
 # ============================================================
 
 with st.sidebar:
-    st.markdown("### Stream controls")
+    st.markdown(
+        """
+        <div style="padding:4px 2px 12px">
+            <div style="font-size:.67rem;font-weight:800;letter-spacing:.11em;color:#2563EB;text-transform:uppercase">Research console</div>
+            <div style="font-size:1.02rem;font-weight:800;color:#12213F;margin-top:4px">Stream controls</div>
+            <div style="font-size:.70rem;color:#7A879C;margin-top:3px;line-height:1.4">Configure playback and observe the model lifecycle.</div>
+        </div>
+        """, unsafe_allow_html=True
+    )
     delay = st.slider(
-        "Seconds per window", 0.0, 1.0, 0.2, 0.1,
+        "Playback speed", 0.0, 1.0, 0.2, 0.1,
         help="Controls the live playback speed.",
     )
 
     start = st.button(
-        "▶  Start / restart stream",
+        "Start / restart stream",
         type="primary",
         width="stretch",
     )
 
-    st.divider()
-    st.markdown("### Pipeline")
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
     st.markdown(
-        "**01 Predict**  ·  SGDRegressor\n\n"
-        "**02 Detect**  ·  KS / PSI + Page-Hinkley\n\n"
-        "**03 Diagnose**  ·  Data / Relational / Both\n\n"
-        "**04 Adapt**  ·  Incremental / Replay\n\n"
-        "**05 Recover**  ·  Post-drift error"
+        """
+        <div style="background:#F8FAFD;border:1px solid #E5EAF2;border-radius:12px;padding:12px 13px;margin-bottom:12px">
+            <div style="font-size:.66rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#7A879C;margin-bottom:8px">Dataset</div>
+            <div style="font-size:.76rem;color:#344054;line-height:1.75">
+                <b>60,000</b> hourly observations<br>
+                <b>8</b> monitored machine variables<br>
+                <b>600 h</b> streaming window<br>
+                <b>6</b> controlled drift episodes
+            </div>
+        </div>
+        <div style="background:#F8FAFD;border:1px solid #E5EAF2;border-radius:12px;padding:12px 13px">
+            <div style="font-size:.66rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#7A879C;margin-bottom:8px">Detection stack</div>
+            <div style="font-size:.74rem;color:#344054;line-height:1.8">
+                <b>01</b> Predict · SGDRegressor<br>
+                <b>02</b> Detect · KS / PSI / Page-Hinkley<br>
+                <b>03</b> Diagnose · Data / Relational / Both<br>
+                <b>04</b> Adapt · Incremental / Replay<br>
+                <b>05</b> Recover · post-drift monitoring
+            </div>
+        </div>
+        """, unsafe_allow_html=True
     )
 
-    st.divider()
-    st.caption(
-        "Ground truth is intentionally hidden from the live dashboard. "
-        "It is used only for offline detector evaluation."
+    st.markdown(
+        """<div style="font-size:.66rem;color:#8A96A8;line-height:1.45;margin-top:14px">
+        Ground-truth labels are deliberately excluded from live detection and adaptation. They are used only for offline evaluation.
+        </div>""",
+        unsafe_allow_html=True,
     )
-
 
 # ============================================================
 # START / RESTART
@@ -499,53 +600,167 @@ with tab_dashboard:
 
 # ============================================================
 # PAGE 2 — EVALUATION & ANALYSIS
-# ============================================================
 
 with tab_analysis:
-    st.markdown('<div class="section-title">Learning strategy summary</div>', unsafe_allow_html=True)
     comparison = read_optional_csv("model_comparison.csv")
-    if comparison is not None and not comparison.empty:
-        st.dataframe(comparison, width="stretch", hide_index=True)
-    else:
-        st.info("Run `run_experiment.py` to generate model comparison results.")
-
-    st.markdown('<div class="section-title">Offline drift-detector evaluation</div>', unsafe_allow_html=True)
     summary = read_optional_csv("detector_metrics_summary.csv")
+
+    st.markdown(
+        """
+        <div class="analysis-head">
+            <div>
+                <div class="eyebrow">Offline research results</div>
+                <div class="analysis-title">Evaluation & Analysis</div>
+                <div class="analysis-subtitle">
+                    Model adaptation performance and event-level drift detection quality across the streaming experiment.
+                    Ground-truth labels remain outside the live decision loop.
+                </div>
+            </div>
+            <div class="head-meta">
+                <div class="meta-chip"><b>Dataset</b> · 60,000 hourly rows</div>
+                <div class="meta-chip"><b>Window</b> · 600 hours</div>
+                <div class="meta-chip"><b>Scoring</b> · Event level</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True
+    )
+
+    # ---------------- Model evaluation ----------------
+    st.markdown('<div class="section-title">Learning strategy performance</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-note">Lower MAE / RMSE is better. Higher R² is better.</div>', unsafe_allow_html=True)
+
+    if comparison is None or comparison.empty:
+        st.info("Run `run_experiment.py` to generate model comparison results.")
+    else:
+        best_mae_row = comparison.loc[comparison["MAE"].idxmin()]
+        best_rmse_row = comparison.loc[comparison["RMSE"].idxmin()]
+        best_r2_row = comparison.loc[comparison["R2"].idxmax()]
+
+        st.markdown(
+            f"""
+            <div class="kpi-grid">
+                <div class="kpi-card blue">
+                    <div class="kpi-label">Best strategy</div>
+                    <div class="kpi-value" style="font-size:1.02rem">{best_mae_row['Strategy']}</div>
+                    <div class="kpi-help">Lowest mean MAE</div>
+                </div>
+                <div class="kpi-card good">
+                    <div class="kpi-label">Best MAE</div>
+                    <div class="kpi-value">{best_mae_row['MAE']:.3f}</div>
+                    <div class="kpi-help">{best_mae_row['Strategy']}</div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-label">Best RMSE</div>
+                    <div class="kpi-value">{best_rmse_row['RMSE']:.3f}</div>
+                    <div class="kpi-help">{best_rmse_row['Strategy']}</div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-label">Best R²</div>
+                    <div class="kpi-value">{best_r2_row['R2']:.3f}</div>
+                    <div class="kpi-help">{best_r2_row['Strategy']}</div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True
+        )
+
+        rows_html = []
+        for _, r in comparison.iterrows():
+            is_best = r["Strategy"] == best_mae_row["Strategy"]
+            cls = "best" if is_best else ""
+            tag = '<span class="best-tag">BEST MAE</span>' if is_best else ''
+            rows_html.append(
+                f'<tr class="{cls}"><td>{r["Strategy"]}{tag}</td>'
+                f'<td>{r["MAE"]:.3f}</td><td>{r["RMSE"]:.3f}</td>'
+                f'<td>{r["R2"]:.3f}</td><td>{int(r["Windows"])}</td></tr>'
+            )
+        st.markdown(
+            """
+            <div class="panel">
+                <div class="panel-title">Strategy comparison</div>
+                <div class="panel-sub">Aggregate performance across the evaluated stream windows.</div>
+                <table class="pro-table">
+                    <thead><tr><th>Strategy</th><th>MAE ↓</th><th>RMSE ↓</th><th>R² ↑</th><th>Windows</th></tr></thead>
+                    <tbody>
+            """ + "".join(rows_html) + """
+                    </tbody>
+                </table>
+            </div>
+            """, unsafe_allow_html=True
+        )
+
+    # ---------------- Detector evaluation ----------------
+    st.markdown('<div class="section-title">Drift detector performance</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-note">Event-level scoring treats each contiguous drift episode as one detection target.</div>', unsafe_allow_html=True)
+
     if summary is None or summary.empty:
         st.info("Run `run_experiment.py` to generate detector evaluation metrics.")
     else:
-        st.caption(
-            "Event-level evaluation: an alarm is matched to a true drift episode "
-            "when it occurs during the episode or within the allowed detection delay. "
-            "Ground truth is used only offline."
+        sm = summary.set_index("Metric")["Mean"].to_dict()
+        precision = float(sm.get("Precision", float("nan")))
+        recall = float(sm.get("Recall", float("nan")))
+        f1 = float(sm.get("F1", float("nan")))
+        episodes = int(sm.get("True drift episodes", 0))
+        matched = int(sm.get("Matched detections", 0))
+        alarms = int(sm.get("Detected alarms", 0))
+        fp = int(sm.get("FP", 0))
+        delay = float(sm.get("Mean detection delay (windows)", float("nan")))
+
+        quality = "Strong" if f1 >= .80 else ("Moderate" if f1 >= .60 else "Needs tuning")
+        quality_cls = "good" if f1 >= .80 else "blue"
+
+        st.markdown(
+            f"""
+            <div class="quality-banner">
+                <div><div class="quality-main">Detector quality · {quality}</div>
+                <div class="quality-sub">{matched}/{episodes} true drift episodes matched · {fp} unmatched alarms · mean delay {delay:.2f} windows</div></div>
+                <div class="quality-score">F1 {f1:.3f}</div>
+            </div>
+            """, unsafe_allow_html=True
         )
-        st.dataframe(summary, width="stretch", hide_index=True)
+
+        detector_cards = [
+            ("Precision", f"{precision:.0%}", "Alarms correctly matched", "good"),
+            ("Recall", f"{recall:.0%}", "True episodes detected", "good"),
+            ("F1 score", f"{f1:.3f}", "Precision / recall balance", quality_cls),
+            ("True episodes", str(episodes), "Offline ground truth", ""),
+            ("Detected alarms", str(alarms), "Live detector outputs", ""),
+            ("Mean delay", f"{delay:.2f}", "Stream windows", ""),
+        ]
+        cards_html = '<div class="kpi-grid" style="grid-template-columns:repeat(6,minmax(0,1fr));">'
+        for label, value, help_text, cls in detector_cards:
+            cards_html += f'<div class="kpi-card {cls}"><div class="kpi-label">{label}</div><div class="kpi-value">{value}</div><div class="kpi-help">{help_text}</div></div>'
+        cards_html += '</div>'
+        st.markdown(cards_html, unsafe_allow_html=True)
+
+        st.markdown(
+            f"""<div class="method-card"><b>Evaluation protocol.</b> An alarm is counted as a correct detection when it occurs inside a true drift episode or within the allowed <b>2-window detection delay</b>. The live detector never reads <code>regime</code>, <code>data_drift</code>, <code>concept_drift</code>, or <code>true_drift_point</code>. <b>{matched}/{episodes}</b> episodes were matched from <b>{alarms}</b> emitted alarms.</div>""",
+            unsafe_allow_html=True,
+        )
 
         by_seed = read_optional_csv("detector_metrics_by_seed.csv")
-        if by_seed is not None and not by_seed.empty:
-            with st.expander("Detailed detector results by seed"):
-                st.dataframe(by_seed, width="stretch", hide_index=True)
-
         window_metrics = read_optional_csv("detector_window_metrics_by_seed.csv")
+
+        if by_seed is not None and not by_seed.empty:
+            with st.expander("Technical audit · detector results by seed"):
+                cols = [c for c in ["Seed", "Precision", "Recall", "F1", "TP", "FP", "FN", "True drift episodes", "Detected alarms", "Matched detections", "Mean detection delay (windows)"] if c in by_seed.columns]
+                st.dataframe(by_seed[cols], width="stretch", hide_index=True)
+
         if window_metrics is not None and not window_metrics.empty:
-            with st.expander("Legacy window-level metrics — diagnostic only"):
+            with st.expander("Technical audit · legacy window-level metrics"):
+                st.caption("Diagnostic only. These metrics are retained for auditability and are not the headline event-level detector score.")
                 st.dataframe(window_metrics, width="stretch", hide_index=True)
 
-    st.markdown('<div class="section-title">Recent detector events</div>', unsafe_allow_html=True)
+    # ---------------- Recent evidence ----------------
+    st.markdown('<div class="section-title">Recent live detector evidence</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-note">Latest detector outputs from the live stream. Ground truth is intentionally absent.</div>', unsafe_allow_html=True)
     inc = strategy_history("Incremental")
     if inc.empty:
-        st.info("Run the live stream to populate detector events.")
+        st.info("Run the live stream to populate detector evidence.")
     else:
-        log_cols = [
-            c for c in [
-                "window", "diagnosis", "data_alarm", "relational_alarm",
-                "alarm", "adapted", "recovery", "worst_ks", "worst_psi",
-                "ph_stat", "mean_resid", "features_moved",
-            ] if c in inc.columns
-        ]
-        st.dataframe(inc[log_cols].tail(100), width="stretch", hide_index=True)
-
-
+        log_cols = [c for c in ["window", "diagnosis", "data_alarm", "relational_alarm", "alarm", "adapted", "recovery", "worst_ks", "worst_psi", "ph_stat", "features_moved"] if c in inc.columns]
+        recent = inc[log_cols].tail(10).copy()
+        recent["window"] = recent["window"].astype(int) + 1
+        st.dataframe(recent, width="stretch", hide_index=True)
 # ============================================================
 # ONE-WINDOW LIVE EXECUTION
 # ============================================================
