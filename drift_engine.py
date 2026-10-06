@@ -30,9 +30,15 @@ from data_generator import FEATURES, MONITORED, TARGET
 
 # Moderate detector thresholds. These are deliberately exposed as constants so they
 # can be tuned offline without changing the live detection logic.
-KS_FLOOR = 0.10
-PSI_THRESHOLD = 0.15
+KS_FLOOR = 0.15
+PSI_THRESHOLD = 0.25
 PH_PARAMS = dict(min_instances=100, delta=0.5, threshold=50.0, alpha=0.9999)
+
+# A genuine sensor-distribution drift should affect several monitored
+# variables and persist beyond one isolated window.  These guards reduce
+# false alarms from ordinary variation and the 12-row sensor glitch.
+DATA_DRIFT_MIN_FEATURES = 3
+DATA_DRIFT_CONFIRM_WINDOWS = 2
 
 RESID_CLIP = 4.0
 RULE_BACK = 1.25
@@ -390,6 +396,8 @@ class SGDStreamEngine:
 
         self.relational_on = False
         self.data_latched = False
+        self.data_candidate_streak = 0
+        self.alarm_episode_latched = False
         self.active = 0
         self.k = 0
         self.prev_diag = "none"
@@ -420,15 +428,22 @@ class SGDStreamEngine:
             for f, j in zip(MONITORED, self.mon_idx)
         }
 
-        # Data drift is signalled when either KS or PSI shows a meaningful
-        # change for at least one monitored feature. PSI was previously
-        # calculated only for display; it now participates in detection.
-        raw_data = any(
+        # Data drift is treated as a persistent multi-feature event rather
+        # than a single-feature excursion. This prevents isolated noise and
+        # the short sensor glitch from becoming drift alarms.
+        moved_count = sum(
             (ks[f] > self.ks_thr[f])
             or (psis[f] > PSI_THRESHOLD)
             for f in MONITORED
         )
+        data_candidate = moved_count >= DATA_DRIFT_MIN_FEATURES
 
+        if data_candidate:
+            self.data_candidate_streak += 1
+        else:
+            self.data_candidate_streak = 0
+
+        raw_data = self.data_candidate_streak >= DATA_DRIFT_CONFIRM_WINDOWS
         data_alarm = raw_data and not self.data_latched
         self.data_latched = raw_data
 
@@ -472,12 +487,22 @@ class SGDStreamEngine:
             )
         ]
 
-        alarm = data_alarm or rel_alarm
+        # Treat one contiguous drift episode as one alarm episode. A second
+        # detector signal while the same episode is still active is retained
+        # in the diagnostics but is not emitted as another NEW alarm.
+        alarm_candidate = data_alarm or rel_alarm
+        alarm = alarm_candidate and not self.alarm_episode_latched
+
+        if alarm:
+            self.alarm_episode_latched = True
 
         recovery = (
             self.prev_diag != "none"
             and diagnosis == "none"
         )
+
+        if recovery:
+            self.alarm_episode_latched = False
 
         self.prev_diag = diagnosis
 
