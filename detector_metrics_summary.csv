@@ -1,0 +1,11 @@
+Metric,Mean,Std
+Precision,1.0,0.0
+Recall,1.0,0.0
+F1,1.0,0.0
+TP,6.0,0.0
+FP,0.0,0.0
+FN,0.0,0.0
+True drift episodes,6.0,0.0
+Detected alarms,6.0,0.0
+Matched detections,6.0,0.0
+Mean detection delay (windows),0.3333333333333333,0.0
