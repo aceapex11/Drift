@@ -1,17 +1,21 @@
+
 """
-Professional Streamlit frontend for the live drift-detection project.
+Streamlit frontend for the existing drift-detection project.
+
+IMPORTANT:
+- Keep this file named: app.py
+- Keep the backend file named: drift_engine.py
+- data_generator.py is unchanged
+- No drift_engine_incremental.py is required.
 
 Run:
     streamlit run app.py
-
-The dashboard uses StrategyRunner from drift_engine.py.
-Ground-truth labels are NOT displayed or used by the live detector.
-They remain available only to run_experiment.py for offline evaluation.
 """
 
 import time
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -26,296 +30,200 @@ from drift_engine import StrategyRunner
 
 st.set_page_config(
     page_title="Live Drift Intelligence",
-    page_icon="◈",
+    page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 COLORS = {
-    "bg": "#F4F7FB",
+    "bg": "#F5F7FB",
     "panel": "#FFFFFF",
-    "border": "#E2E8F0",
-    "grid": "#E8EDF4",
+    "grid": "#D9E1EC",
     "text": "#172033",
     "muted": "#64748B",
     "static": "#64748B",
     "incremental": "#16A34A",
-    "replay100": "#2563EB",
-    "replay500": "#7C3AED",
     "data": "#0284C7",
     "relational": "#7C3AED",
     "alarm": "#D97706",
+    "truth": "#E11D48",
     "adapt": "#0F766E",
     "danger": "#DC2626",
 }
 
-STRATEGIES = [
-    "Static",
-    "Incremental",
-    "Continual + replay(100)",
-    "Continual + replay(500)",
-]
-
-STRATEGY_LABELS = {
-    "Static": "Static",
-    "Incremental": "Incremental SGD",
-    "Continual + replay(100)": "Replay 100",
-    "Continual + replay(500)": "Replay 500",
-}
-
-STRATEGY_COLORS = {
-    "Static": COLORS["static"],
-    "Incremental": COLORS["incremental"],
-    "Continual + replay(100)": COLORS["replay100"],
-    "Continual + replay(500)": COLORS["replay500"],
-}
-
 st.markdown(
-    """
+    f"""
     <style>
-        /* ---------- Global light enterprise theme ---------- */
-        :root {
-            --bg: #F5F7FB;
-            --surface: #FFFFFF;
-            --surface-2: #F8FAFD;
-            --line: #E5EAF2;
-            --text: #12213F;
-            --muted: #667085;
-            --blue: #2563EB;
-            --blue-soft: #EAF2FF;
-            --green: #0F9D72;
-            --green-soft: #E8F8F2;
-            --amber: #C77700;
-            --amber-soft: #FFF5E6;
-            --red: #D64545;
-            --red-soft: #FDEEEE;
-        }
+        .stApp {{
+            background: {COLORS["bg"]};
+            color: {COLORS["text"]};
+        }}
 
-        .stApp { background: var(--bg); color: var(--text); }
-        .main .block-container { max-width: 1500px; padding: 1.2rem 2rem 3rem; }
-        [data-testid="stSidebar"] {
+        [data-testid="stSidebar"] {{
             background: #FFFFFF;
-            border-right: 1px solid var(--line);
-        }
-        [data-testid="stSidebar"] * { color: var(--text); }
-        [data-testid="stHeader"] { background: rgba(255,255,255,.94); border-bottom: 1px solid var(--line); }
-        [data-testid="stToolbar"] { background: transparent; }
+            border-right: 1px solid #D9E1EC;
+        }}
 
-        /* Hide the default Streamlit decoration that makes the app feel like a demo. */
-        #MainMenu { visibility: hidden; }
-        footer { visibility: hidden; }
+        [data-testid="stSidebar"] * {{
+            color: {COLORS["text"]};
+        }}
 
-        /* ---------- Brand / hero ---------- */
-        .brand-row { display:flex; align-items:center; gap:12px; margin:4px 0 22px; }
-        .brand-mark {
-            width:40px; height:40px; border-radius:11px; display:flex; align-items:center; justify-content:center;
-            background:linear-gradient(135deg,#EAF2FF,#DCEAFF); border:1px solid #CFE0FF; color:#2563EB;
-            font-size:18px; font-weight:800; box-shadow:0 4px 12px rgba(37,99,235,.08);
-        }
-        .brand-name { font-size:1.02rem; font-weight:780; letter-spacing:-.02em; color:#10254B; }
-        .brand-caption { color:#7A879C; font-size:.70rem; margin-top:1px; }
-        .hero {
-            background:linear-gradient(105deg,#FFFFFF 0%,#F7FAFF 100%);
-            border:1px solid var(--line); border-radius:18px; padding:22px 26px; margin-bottom:18px;
-            box-shadow:0 6px 22px rgba(16,33,63,.035);
-        }
-        .hero-eyebrow { color:#2563EB; font-size:.70rem; font-weight:800; letter-spacing:.12em; text-transform:uppercase; margin-bottom:6px; }
-        .hero-title { font-size:1.75rem; line-height:1.15; font-weight:800; letter-spacing:-.035em; color:#10254B; margin-bottom:6px; }
-        .hero-subtitle { color:#667085; font-size:.88rem; line-height:1.5; }
-        .status-pill {
-            display:inline-flex; align-items:center; gap:7px; margin-top:12px; padding:5px 10px; border-radius:999px;
-            background:#ECFDF3; border:1px solid #CDEEDC; color:#087A57; font-size:.70rem; font-weight:750;
-        }
-        .status-dot { width:7px; height:7px; border-radius:50%; background:#10B981; box-shadow:0 0 0 3px #D9F8EA; }
+        [data-testid="stHeader"] {{
+            background: #FFFFFF;
+        }}
 
-        /* ---------- Navigation ---------- */
-        div[data-testid="stTabs"] { margin-top:0; }
-        div[data-testid="stTabs"] button {
-            font-weight:720; color:#667085; font-size:.82rem; padding:9px 14px;
-        }
-        div[data-testid="stTabs"] button[aria-selected="true"] { color:#2563EB; }
-        div[data-testid="stTabs"] [data-baseweb="tab-highlight"] { background:#2563EB; height:2px; }
+        [data-testid="stMetric"] {{
+            background: {COLORS["panel"]};
+            border: 1px solid #D9E1EC;
+            border-radius: 14px;
+            padding: 14px 16px;
+        }}
 
-        /* ---------- KPI cards ---------- */
-        [data-testid="stMetric"] {
-            background:#FFFFFF; border:1px solid var(--line); border-radius:14px; padding:13px 15px;
-            box-shadow:0 4px 14px rgba(16,33,63,.025); min-height:82px;
-        }
-        [data-testid="stMetricLabel"] { color:#7A879C; font-size:.68rem; font-weight:800; letter-spacing:.045em; text-transform:uppercase; }
-        [data-testid="stMetricValue"] { color:#12213F; font-size:1.32rem; font-weight:790; letter-spacing:-.02em; }
-        [data-testid="stMetricDelta"] { font-size:.70rem; }
-        .section-title { color:#12213F; font-size:1.02rem; font-weight:780; letter-spacing:-.01em; margin:1.2rem 0 .18rem; }
-        .section-note { color:#7A879C; font-size:.77rem; margin-bottom:.6rem; }
-        .eyebrow { color:#2563EB; font-size:.67rem; font-weight:800; letter-spacing:.12em; text-transform:uppercase; margin-bottom:.3rem; }
+        [data-testid="stMetricLabel"] {{
+            color: {COLORS["muted"]};
+        }}
 
-        /* ---------- Analysis page ---------- */
-        .analysis-head {
-            display:flex; justify-content:space-between; align-items:flex-start; gap:20px;
-            background:#FFFFFF; border:1px solid var(--line); border-radius:18px; padding:20px 22px;
-            box-shadow:0 6px 22px rgba(16,33,63,.035); margin-bottom:16px;
-        }
-        .analysis-title { font-size:1.48rem; font-weight:800; letter-spacing:-.03em; color:#10254B; }
-        .analysis-subtitle { color:#667085; font-size:.80rem; line-height:1.45; margin-top:4px; max-width:780px; }
-        .head-meta { display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
-        .meta-chip { background:#F7F9FC; border:1px solid var(--line); color:#526174; border-radius:9px; padding:7px 10px; font-size:.68rem; font-weight:700; white-space:nowrap; }
-        .meta-chip b { color:#12213F; }
-        .kpi-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin:8px 0 14px; }
-        .kpi-card { background:#FFFFFF; border:1px solid var(--line); border-radius:14px; padding:14px 15px; min-height:86px; box-shadow:0 4px 14px rgba(16,33,63,.025); }
-        .kpi-card.good { background:linear-gradient(180deg,#FFFFFF,#F7FCFA); border-color:#D7EEE5; }
-        .kpi-card.blue { background:linear-gradient(180deg,#FFFFFF,#F7FAFF); border-color:#DCE8FF; }
-        .kpi-label { color:#7A879C; font-size:.66rem; font-weight:800; text-transform:uppercase; letter-spacing:.07em; }
-        .kpi-value { color:#12213F; font-size:1.35rem; line-height:1.15; font-weight:800; margin-top:5px; letter-spacing:-.025em; }
-        .kpi-help { color:#8A96A8; font-size:.68rem; margin-top:4px; }
-        .panel { background:#FFFFFF; border:1px solid var(--line); border-radius:16px; padding:15px 16px; box-shadow:0 5px 18px rgba(16,33,63,.028); }
-        .panel-title { color:#12213F; font-size:.92rem; font-weight:780; }
-        .panel-sub { color:#7A879C; font-size:.70rem; margin-top:2px; margin-bottom:9px; }
-        .method-card { background:#F8FAFD; border:1px solid var(--line); border-radius:12px; padding:12px 14px; color:#526174; font-size:.72rem; line-height:1.5; margin:10px 0 4px; }
-        .method-card b { color:#12213F; }
-        .quality-banner {
-            display:flex; align-items:center; justify-content:space-between; gap:12px; padding:11px 14px;
-            background:#F0FBF6; border:1px solid #D4EFE3; border-radius:12px; color:#0A7755; margin:10px 0 14px;
-        }
-        .quality-main { font-size:.78rem; font-weight:800; }
-        .quality-sub { font-size:.68rem; color:#5C8778; margin-top:2px; }
-        .quality-score { font-size:1.05rem; font-weight:850; }
+        [data-testid="stMetricValue"] {{
+            color: {COLORS["text"]};
+        }}
 
-        /* ---------- Tables ---------- */
-        .pro-table { width:100%; border-collapse:separate; border-spacing:0; overflow:hidden; border:1px solid var(--line); border-radius:12px; background:#fff; font-size:.73rem; }
-        .pro-table th { text-align:left; color:#718096; font-size:.65rem; font-weight:800; text-transform:uppercase; letter-spacing:.05em; background:#F8FAFD; padding:10px 12px; border-bottom:1px solid var(--line); }
-        .pro-table td { padding:10px 12px; border-bottom:1px solid #EEF1F5; color:#344054; }
-        .pro-table tr:last-child td { border-bottom:0; }
-        .pro-table tr.best td { background:#F2F8FF; color:#10254B; font-weight:720; }
-        .best-tag { display:inline-block; margin-left:6px; padding:2px 6px; border-radius:999px; background:#E8F1FF; color:#2563EB; font-size:.58rem; font-weight:800; }
-        .metric-good { color:#087A57; font-weight:800; }
-        .metric-neutral { color:#344054; }
+        .section-title {{
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: {COLORS["text"]};
+            margin: 0.6rem 0 0.25rem 0;
+        }}
 
-        /* ---------- Buttons / expanders ---------- */
-        .stButton > button { border-radius:10px; font-weight:750; border:1px solid #DCE3EE; }
-        .stButton > button[kind="primary"] { background:#2563EB; border-color:#2563EB; }
-        [data-testid="stExpander"] { border:1px solid var(--line); border-radius:12px; background:#FFFFFF; }
-        [data-testid="stExpanderToggleIcon"] { color:#667085; }
-        .stAlert { border-radius:12px; }
+        .small-note {{
+            color: {COLORS["muted"]};
+            font-size: 0.85rem;
+        }}
 
-        @media (max-width: 900px) {
-            .main .block-container { padding:1rem; }
-            .analysis-head { flex-direction:column; }
-            .head-meta { justify-content:flex-start; }
-            .kpi-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
-        }
+        div[data-testid="stTabs"] button {{
+            font-weight: 650;
+        }}
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-st.markdown(
-    """
-    <div class="brand-row">
-        <div class="brand-mark">↗</div>
-        <div>
-            <div class="brand-name">Live Drift Intelligence</div>
-            <div class="brand-caption">Industrial ML monitoring & adaptive learning</div>
-        </div>
-    </div>
-    <div class="hero">
-        <div class="hero-eyebrow">Industrial predictive maintenance · research console</div>
-        <div class="hero-title">Live Drift Intelligence</div>
-        <div class="hero-subtitle">
-            A streaming regression system for detecting distribution and relational drift, diagnosing the change,
-            and adapting the learner without exposing ground-truth labels to the live detector.
-        </div>
-        <div class="status-pill"><span class="status-dot"></span> Live monitoring architecture ready</div>
-    </div>
-    """,
-    unsafe_allow_html=True,
+st.title("◈ Live Drift Intelligence")
+st.caption(
+    "Predict → Detect → Diagnose → Adapt → Recover  |  "
+    "KS / PSI data drift  •  Page-Hinkley relational drift  •  "
+    "Incremental / Continual Learning"
 )
 
 
 # ============================================================
-# DATA / SESSION STATE
+# DATA
 # ============================================================
 
-@st.cache_data(show_spinner="Generating synthetic stream data…")
+@st.cache_data(show_spinner="Generating synthetic stream…")
 def load_data():
     return generate()
 
 
-for key, default in {
-    "history": [],
-    "events": [],
-    "live_runner": None,
-    "stream_df": None,
-    "stream_index": 0,
-    "stream_running": False,
-    "stream_finished": False,
-}.items():
-    if key not in st.session_state:
-        st.session_state[key] = default
+# Data is loaded lazily only when the user starts the live stream.
+# This keeps the dashboard visible immediately after deployment.
+df = None
 
 
 # ============================================================
 # HELPERS
 # ============================================================
 
-def read_optional_csv(filename):
-    path = Path(__file__).resolve().parent / filename
+def make_fig(title, y_title=None, height=370):
+    fig = go.Figure()
+
+    fig.update_layout(
+        title=dict(text=title, x=0.01, xanchor="left"),
+        template="plotly_white",
+        paper_bgcolor=COLORS["panel"],
+        plot_bgcolor=COLORS["panel"],
+        font=dict(color=COLORS["text"]),
+        height=height,
+        margin=dict(l=45, r=35, t=62, b=42),
+        hovermode="x unified",
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="left",
+            x=0,
+        ),
+        xaxis=dict(
+            title="Stream window",
+            gridcolor=COLORS["grid"],
+            zeroline=False,
+        ),
+        yaxis=dict(
+            title=y_title or "",
+            gridcolor=COLORS["grid"],
+            zeroline=False,
+        ),
+    )
+
+    return fig
+
+
+def read_csv(name):
+    path = Path(__file__).resolve().parent / name
+
     if not path.exists():
         return None
+
     try:
         return pd.read_csv(path)
     except Exception:
         return None
 
 
-def history_df():
-    if not st.session_state.history:
-        return pd.DataFrame()
-    return pd.DataFrame(st.session_state.history).sort_values(
-        ["window", "strategy"]
-    ).reset_index(drop=True)
-
-
-def strategy_history(strategy):
-    d = history_df()
-    if d.empty:
-        return d
-    return d[d["strategy"] == strategy].sort_values("window")
-
-
-def current_rows():
-    d = history_df()
-    if d.empty or "strategy" not in d.columns:
-        return {}
-    return {
-        strategy: d[d["strategy"] == strategy].iloc[-1]
-        for strategy in STRATEGIES
-        if not d[d["strategy"] == strategy].empty
-    }
-
-
-def current_best_model():
-    rows = current_rows()
-    if not rows:
-        return "—", None
-    best = min(rows.items(), key=lambda item: float(item[1]["mae"]))
-    return STRATEGY_LABELS[best[0]], float(best[1]["mae"])
-
-
-def add_event_lines(fig, events):
+def add_event_lines(fig, events, show_truth):
     seen = set()
+
     for event in events:
-        kind = event.get("type")
-        if kind not in {"alarm", "adapt"}:
+        kind = event["type"]
+
+        if kind == "truth" and not show_truth:
             continue
 
-        color = COLORS["alarm"] if kind == "alarm" else COLORS["adapt"]
-        dash = "solid" if kind == "alarm" else "dot"
-        label = "New drift alarm" if kind == "alarm" else "Adaptation"
+        color = {
+            "truth": COLORS["truth"],
+            "alarm": COLORS["alarm"],
+            "adapt": COLORS["adapt"],
+            "data_on": COLORS["data"],
+            "relational_on": COLORS["relational"],
+        }[kind]
+
+        dash = {
+            "truth": "dash",
+            "alarm": "solid",
+            "adapt": "dot",
+            "data_on": "dashdot",
+            "relational_on": "dashdot",
+        }[kind]
+
+        label = {
+            "truth": "True drift",
+            "alarm": "New drift alarm",
+            "adapt": "Adaptation",
+            "data_on": "Data drift active",
+            "relational_on": "Relational drift active",
+        }[kind]
 
         if kind not in seen:
             fig.add_trace(
                 go.Scatter(
-                    x=[None], y=[None], mode="lines", name=label,
-                    line=dict(color=color, dash=dash, width=2),
+                    x=[None],
+                    y=[None],
+                    mode="lines",
+                    name=label,
+                    line=dict(
+                        color=color,
+                        dash=dash,
+                        width=2,
+                    ),
                 )
             )
             seen.add(kind)
@@ -324,130 +232,43 @@ def add_event_lines(fig, events):
             x=event["window"],
             line_color=color,
             line_dash=dash,
-            line_width=1.3,
-            opacity=0.7,
+            line_width=1.5,
+            opacity=0.75,
         )
+
     return fig
 
 
-def base_fig(title, y_title, height=360):
-    fig = go.Figure()
-    fig.update_layout(
-        title=dict(text=title, x=0.01, xanchor="left", font=dict(size=16)),
-        template="plotly_white",
-        paper_bgcolor=COLORS["panel"],
-        plot_bgcolor=COLORS["panel"],
-        font=dict(color=COLORS["text"]),
-        height=height,
-        margin=dict(l=48, r=28, t=58, b=42),
-        hovermode="x unified",
-        legend=dict(
-            orientation="h", yanchor="bottom", y=1.02,
-            xanchor="left", x=0, font=dict(size=11),
-        ),
-        xaxis=dict(
-            title="Stream window", gridcolor=COLORS["grid"],
-            zeroline=False, fixedrange=False,
-        ),
-        yaxis=dict(
-            title=y_title, gridcolor=COLORS["grid"],
-            zeroline=False,
-        ),
-    )
-    return fig
+def build_truth_events(data):
+    events = []
 
+    if "true_drift_point" not in data.columns:
+        return events
 
-def plot_best_model(d, height=350):
-    """Show only the model that has the lowest MAE at each window."""
-    fig = base_fig("Best model at each window", "MAE", height)
-    if d.empty:
-        return fig
-
-    pivot = d.pivot_table(
-        index="window", columns="strategy", values="mae", aggfunc="first"
-    ).sort_index()
-
-    winner = pivot.idxmin(axis=1, skipna=True)
-    best_value = pivot.min(axis=1, skipna=True)
-
-    # One continuous line connects every window.
-    # The marker colour identifies which strategy won that window.
-    # This avoids gaps when the best strategy changes from one window to the next.
-    winner_labels = winner.map(STRATEGY_LABELS).tolist()
-    winner_colors = [STRATEGY_COLORS.get(w, COLORS["incremental"]) for w in winner]
-
-    fig.add_trace(
-        go.Scatter(
-            x=pivot.index,
-            y=best_value,
-            mode="lines+markers",
-            name="Best model",
-            line=dict(color=COLORS["text"], width=3),
-            marker=dict(
-                size=8,
-                color=winner_colors,
-                line=dict(color=COLORS["panel"], width=1.5),
-            ),
-            customdata=winner_labels,
-            hovertemplate=(
-                "Window %{x}<br>"
-                "Best model: %{customdata}<br>"
-                "MAE: %{y:.3f}<extra></extra>"
-            ),
+    points = (
+        pd.to_numeric(
+            data["true_drift_point"],
+            errors="coerce",
         )
+        .dropna()
+        .unique()
     )
 
-    return fig
+    for point in points:
+        point = int(point)
 
-
-def plot_all_models(d, height=360):
-    fig = base_fig("Model MAE comparison", "MAE", height)
-    if d.empty:
-        return fig
-
-    for strategy in STRATEGIES:
-        h = d[d["strategy"] == strategy]
-        if h.empty:
-            continue
-        fig.add_trace(
-            go.Scatter(
-                x=h["window"], y=h["mae"],
-                mode="lines+markers",
-                name=STRATEGY_LABELS[strategy],
-                line=dict(color=STRATEGY_COLORS[strategy], width=2.4),
-                marker=dict(size=3),
-            )
-        )
-    return fig
-
-
-def plot_drift_signals(d, height=330):
-    fig = base_fig("Drift detector signals", "Signal", height)
-    if d.empty:
-        return fig
-    inc = d[d["strategy"] == "Incremental"]
-    if inc.empty:
-        return fig
-
-    signals = [
-        ("worst_ks", "Worst KS", COLORS["data"]),
-        ("worst_psi", "Worst PSI", COLORS["relational"]),
-        ("ph_stat", "Page-Hinkley", COLORS["alarm"]),
-    ]
-    for col, label, color in signals:
-        if col in inc.columns:
-            fig.add_trace(
-                go.Scatter(
-                    x=inc["window"], y=inc[col],
-                    mode="lines", name=label,
-                    line=dict(color=color, width=2.2),
-                )
+        # Convert row position into stream-window position.
+        if point >= TRAIN_END:
+            window_number = (point - TRAIN_END) // WINDOW
+            events.append(
+                {
+                    "window": int(window_number),
+                    "type": "truth",
+                    "row": point,
+                }
             )
 
-    # Show detector events directly on the drift-signal chart so that
-    # the signal and the resulting action can be read on the same timeline.
-    fig = add_event_lines(fig, st.session_state.events)
-    return fig
+    return events
 
 
 # ============================================================
@@ -455,304 +276,1182 @@ def plot_drift_signals(d, height=330):
 # ============================================================
 
 with st.sidebar:
-    st.markdown(
-        """
-        <div style="padding:4px 2px 12px">
-            <div style="font-size:.67rem;font-weight:800;letter-spacing:.11em;color:#2563EB;text-transform:uppercase">Research console</div>
-            <div style="font-size:1.02rem;font-weight:800;color:#12213F;margin-top:4px">Stream controls</div>
-            <div style="font-size:.70rem;color:#7A879C;margin-top:3px;line-height:1.4">Configure playback and observe the model lifecycle.</div>
-        </div>
-        """, unsafe_allow_html=True
-    )
+    st.header("Stream controls")
+
     delay = st.slider(
-        "Playback speed", 0.0, 1.0, 0.2, 0.1,
-        help="Controls the live playback speed.",
+        "Seconds per window",
+        min_value=0.0,
+        max_value=2.0,
+        value=0.0,
+        step=0.1,
+    )
+
+    show_truth = st.checkbox(
+        "Show simulated ground truth",
+        value=False,
+        help=(
+            "Ground truth is used only for offline evaluation and "
+            "visualization. It is never used by the live detector."
+        ),
     )
 
     start = st.button(
-        "Start / restart stream",
+        "▶ Start / restart live stream",
         type="primary",
         width="stretch",
     )
 
-    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+    st.divider()
+
+    st.markdown("### Pipeline")
+
     st.markdown(
         """
-        <div style="background:#F8FAFD;border:1px solid #E5EAF2;border-radius:12px;padding:12px 13px;margin-bottom:12px">
-            <div style="font-size:.66rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#7A879C;margin-bottom:8px">Dataset</div>
-            <div style="font-size:.76rem;color:#344054;line-height:1.75">
-                <b>60,000</b> hourly observations<br>
-                <b>8</b> monitored machine variables<br>
-                <b>600 h</b> streaming window<br>
-                <b>6</b> controlled drift episodes
-            </div>
-        </div>
-        <div style="background:#F8FAFD;border:1px solid #E5EAF2;border-radius:12px;padding:12px 13px">
-            <div style="font-size:.66rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#7A879C;margin-bottom:8px">Detection stack</div>
-            <div style="font-size:.74rem;color:#344054;line-height:1.8">
-                <b>01</b> Predict · SGDRegressor<br>
-                <b>02</b> Detect · KS / PSI / Page-Hinkley<br>
-                <b>03</b> Diagnose · Data / Relational / Both<br>
-                <b>04</b> Adapt · Incremental / Replay<br>
-                <b>05</b> Recover · post-drift monitoring
-            </div>
-        </div>
-        """, unsafe_allow_html=True
+        **1. Predict**  
+        SGDRegressor
+
+        **2. Detect**  
+        KS / PSI + Page-Hinkley
+
+        **3. Diagnose**  
+        DATA / RELATIONAL / BOTH
+
+        **4. Adapt**  
+        Incremental learning
+
+        **5. Recover**  
+        Monitor post-drift error
+        """
     )
 
-    st.markdown(
-        """<div style="font-size:.66rem;color:#8A96A8;line-height:1.45;margin-top:14px">
-        Ground-truth labels are deliberately excluded from live detection and adaptation. They are used only for offline evaluation.
-        </div>""",
-        unsafe_allow_html=True,
+    st.divider()
+
+    st.caption(
+        "Static, Incremental SGD, and Continual Learning "
+        "with Replay(100/500) are compared live. "
+        "Full retraining remains in `run_experiment.py`."
     )
 
+
 # ============================================================
-# START / RESTART
+# SESSION STATE
 # ============================================================
+
+if "history" not in st.session_state:
+    st.session_state.history = []
+
+if "events" not in st.session_state:
+    st.session_state.events = []
+
+if "live_runner" not in st.session_state:
+    st.session_state.live_runner = None
+
+if "stream_df" not in st.session_state:
+    st.session_state.stream_df = None
+
+if "stream_index" not in st.session_state:
+    st.session_state.stream_index = 0
 
 if start:
     st.session_state.history = []
     st.session_state.events = []
-    st.session_state.stream_index = 0
-    st.session_state.stream_running = True
+
+
+# ============================================================
+# TABS
+# ============================================================
+
+tabs = st.tabs(
+    [
+        "◉ Live Monitor",
+        "◈ Drift Analysis",
+        "▤ Model Performance",
+        "↗ Adaptation & Recovery",
+        "◎ Detector Evaluation",
+        "☷ Event Log",
+    ]
+)
+
+
+# ============================================================
+# LIVE MONITOR
+# ============================================================
+
+with tabs[0]:
+
+    st.markdown(
+        '<div class="section-title">Live model behaviour</div>',
+        unsafe_allow_html=True,
+    )
+
+    # The live runner stores one row per strategy:
+    # Static, Incremental, Replay(100), Replay(500).
+    history = pd.DataFrame(
+        st.session_state.history
+    )
+
+    if history.empty:
+
+        st.info(
+            "Click **Start / restart live stream** to begin. "
+            "The charts will update window-by-window."
+        )
+
+    else:
+
+        incremental = history[
+            history["strategy"] == "Incremental"
+        ].copy()
+
+        static = history[
+            history["strategy"] == "Static"
+        ].copy()
+
+        replay100 = history[
+            history["strategy"] == "Continual + replay(100)"
+        ].copy()
+
+        replay500 = history[
+            history["strategy"] == "Continual + replay(500)"
+        ].copy()
+
+        if not incremental.empty:
+
+            last = incremental.iloc[-1]
+
+            metric_cols = st.columns(6)
+
+            metric_cols[0].metric(
+                "CURRENT WINDOW",
+                int(last["window"]) + 1,
+            )
+
+            metric_cols[1].metric(
+                "DIAGNOSIS",
+                str(last["diagnosis"]).upper(),
+            )
+
+            metric_cols[2].metric(
+                "INCREMENTAL MAE",
+                f"{last['mae']:.3f}",
+            )
+
+            metric_cols[3].metric(
+                "REPLAY 100 MAE",
+                f"{replay100.iloc[-1]['mae']:.3f}"
+                if not replay100.empty
+                else "—",
+            )
+
+            metric_cols[4].metric(
+                "REPLAY 500 MAE",
+                f"{replay500.iloc[-1]['mae']:.3f}"
+                if not replay500.empty
+                else "—",
+            )
+
+            metric_cols[5].metric(
+                "INCREMENTAL R²",
+                f"{last['r2']:.3f}",
+            )
+
+            # Live learning chart.
+            fig = make_fig(
+                "Live learning behaviour",
+                "MAE",
+                420,
+            )
+
+            if not static.empty:
+                fig.add_trace(
+                    go.Scatter(
+                        x=static["window"],
+                        y=static["mae"],
+                        mode="lines+markers",
+                        name="Static — no adaptation",
+                        line=dict(
+                            color=COLORS["static"],
+                            width=2.5,
+                        ),
+                        marker=dict(size=3),
+                    )
+                )
+
+            fig.add_trace(
+                go.Scatter(
+                    x=incremental["window"],
+                    y=incremental["mae"],
+                    mode="lines+markers",
+                    name="Incremental SGD",
+                    line=dict(
+                        color=COLORS["incremental"],
+                        width=3,
+                    ),
+                    marker=dict(size=3),
+                )
+            )
+
+            if not replay100.empty:
+                fig.add_trace(
+                    go.Scatter(
+                        x=replay100["window"],
+                        y=replay100["mae"],
+                        mode="lines+markers",
+                        name="Continual + Replay 100",
+                        line=dict(
+                            color="#2563EB",
+                            width=2.5,
+                        ),
+                        marker=dict(size=3),
+                    )
+                )
+
+            if not replay500.empty:
+                fig.add_trace(
+                    go.Scatter(
+                        x=replay500["window"],
+                        y=replay500["mae"],
+                        mode="lines+markers",
+                        name="Continual + Replay 500",
+                        line=dict(
+                            color="#9333EA",
+                            width=2.5,
+                        ),
+                        marker=dict(size=3),
+                    )
+                )
+
+            fig = add_event_lines(
+                fig,
+                st.session_state.events,
+                show_truth,
+            )
+
+            st.plotly_chart(
+                fig,
+                width="stretch",
+                key=f"top_live_model_{len(history)}",
+            )
+
+            # Live detector chart.
+            drift_fig = make_fig(
+                "Live drift detection",
+                "Signal",
+                380,
+            )
+
+            drift_fig.add_trace(
+                go.Scatter(
+                    x=incremental["window"],
+                    y=incremental["worst_ks"],
+                    mode="lines",
+                    name="Worst KS",
+                    line=dict(
+                        color=COLORS["data"],
+                        width=2.5,
+                    ),
+                )
+            )
+
+            drift_fig.add_trace(
+                go.Scatter(
+                    x=incremental["window"],
+                    y=incremental["worst_psi"],
+                    mode="lines",
+                    name="Worst PSI",
+                    line=dict(
+                        color=COLORS["relational"],
+                        width=2.5,
+                    ),
+                )
+            )
+
+            drift_fig.add_trace(
+                go.Scatter(
+                    x=incremental["window"],
+                    y=incremental["ph_stat"],
+                    mode="lines",
+                    name="Page-Hinkley",
+                    line=dict(
+                        color=COLORS["alarm"],
+                        width=2.5,
+                    ),
+                )
+            )
+
+            st.plotly_chart(
+                drift_fig,
+                width="stretch",
+                key=f"top_live_drift_{len(history)}",
+            )
+
+# ============================================================
+# DRIFT ANALYSIS
+# ============================================================
+
+with tabs[1]:
+
+    history = pd.DataFrame(
+        st.session_state.history
+    )
+
+    # Live history contains four learning strategies. Drift detector
+    # signals are identical in role only for the Incremental stream,
+    # which is the primary live detector/adaptation path.
+    if not history.empty and "strategy" in history.columns:
+        history = history[
+            history["strategy"] == "Incremental"
+        ].copy()
+
+    if history.empty:
+        saved = read_csv("stream_log.csv")
+        if saved is not None:
+            history = saved
+
+    if history.empty:
+        st.info(
+            "Run the live stream or `run_experiment.py` first."
+        )
+
+    else:
+
+        left, right = st.columns(2)
+
+        with left:
+            if "worst_ks" in history.columns:
+
+                fig = make_fig(
+                    "Worst KS statistic",
+                    "KS statistic",
+                )
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=history["window"],
+                        y=history["worst_ks"],
+                        name="Worst KS",
+                        line=dict(
+                            color=COLORS["data"],
+                            width=2.5,
+                        ),
+                    )
+                )
+
+                fig.add_hline(
+                    y=0.15,
+                    line_dash="dash",
+                    line_color=COLORS["alarm"],
+                )
+
+                st.plotly_chart(
+                    fig,
+                    width="stretch",
+                )
+
+        with right:
+            if "worst_psi" in history.columns:
+
+                fig = make_fig(
+                    "Worst PSI",
+                    "PSI",
+                )
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=history["window"],
+                        y=history["worst_psi"],
+                        name="Worst PSI",
+                        line=dict(
+                            color=COLORS["relational"],
+                            width=2.5,
+                        ),
+                    )
+                )
+
+                fig.add_hline(
+                    y=0.25,
+                    line_dash="dash",
+                    line_color=COLORS["alarm"],
+                )
+
+                st.plotly_chart(
+                    fig,
+                    width="stretch",
+                )
+
+        if "ph_stat" in history.columns:
+
+            fig = make_fig(
+                "Page-Hinkley relational-drift signal",
+                "PH statistic",
+            )
+
+            fig.add_trace(
+                go.Scatter(
+                    x=history["window"],
+                    y=history["ph_stat"],
+                    name="Page-Hinkley",
+                    line=dict(
+                        color=COLORS["relational"],
+                        width=2.5,
+                    ),
+                )
+            )
+
+            st.plotly_chart(
+                fig,
+                width="stretch",
+            )
+
+        if "ks" in history.columns:
+            latest = history.iloc[-1]
+
+            ks_values = latest["ks"]
+
+            if isinstance(ks_values, str):
+                try:
+                    import ast as _ast
+                    ks_values = _ast.literal_eval(ks_values)
+                except Exception:
+                    ks_values = {}
+
+            if isinstance(ks_values, dict) and ks_values:
+
+                sensor_df = (
+                    pd.Series(
+                        ks_values,
+                        dtype=float,
+                    )
+                    .sort_values()
+                    .reset_index()
+                )
+
+                sensor_df.columns = [
+                    "Sensor",
+                    "KS",
+                ]
+
+                fig = go.Figure(
+                    go.Bar(
+                        x=sensor_df["KS"],
+                        y=sensor_df["Sensor"],
+                        orientation="h",
+                    )
+                )
+
+                fig.update_layout(
+                    title="Latest sensor-level KS statistics",
+                    template="plotly_white",
+                    paper_bgcolor=COLORS["panel"],
+                    plot_bgcolor=COLORS["panel"],
+                    font=dict(color=COLORS["text"]),
+                    height=360,
+                    xaxis=dict(
+                        title="KS statistic",
+                        gridcolor=COLORS["grid"],
+                    ),
+                    yaxis=dict(
+                        title="Sensor",
+                        gridcolor=COLORS["grid"],
+                    ),
+                )
+
+                st.plotly_chart(
+                    fig,
+                    width="stretch",
+                )
+
+
+# ============================================================
+# MODEL PERFORMANCE
+# ============================================================
+
+with tabs[2]:
+
+    comparison = read_csv("model_comparison.csv")
+
+    if comparison is None or comparison.empty:
+
+        st.info(
+            "Run `run_experiment.py` first to generate "
+            "`model_comparison.csv`."
+        )
+
+    else:
+
+        st.subheader("Learning strategy comparison")
+
+        st.dataframe(
+            comparison,
+            width="stretch",
+            hide_index=True,
+        )
+
+        metric_candidates = [
+            "MAE",
+            "RMSE",
+            "R2",
+            "R²",
+        ]
+
+        available = [
+            x for x in metric_candidates
+            if x in comparison.columns
+        ]
+
+        strategy_col = next(
+            (
+                x for x in
+                ["Strategy", "strategy", "Model", "Method"]
+                if x in comparison.columns
+            ),
+            None,
+        )
+
+        if available and strategy_col:
+
+            selected_metric = st.selectbox(
+                "Metric",
+                available,
+            )
+
+            fig = make_fig(
+                f"{selected_metric} by learning strategy",
+                selected_metric,
+                400,
+            )
+
+            fig.add_trace(
+                go.Bar(
+                    x=comparison[strategy_col],
+                    y=comparison[selected_metric],
+                    name=selected_metric,
+                )
+            )
+
+            st.plotly_chart(
+                fig,
+                width="stretch",
+            )
+
+        st.markdown("### Metrics")
+
+        st.markdown(
+            """
+            **MAE ↓** — average absolute prediction error  
+            **RMSE ↓** — penalizes larger errors more strongly  
+            **R² ↑** — proportion of target variance explained
+            """
+        )
+
+
+# ============================================================
+# ADAPTATION & RECOVERY
+# ============================================================
+
+with tabs[3]:
+
+    history = pd.DataFrame(
+        st.session_state.history
+    )
+
+    if history.empty:
+        history = read_csv("stream_log.csv")
+
+    if history is None or history.empty:
+        st.info(
+            "Run the live stream or `run_experiment.py` first."
+        )
+
+    else:
+
+        if "strategy" in history.columns:
+            metric_history = history[
+                history["strategy"] == "Incremental"
+            ].copy()
+        else:
+            metric_history = history.copy()
+
+        c1, c2, c3, c4 = st.columns(4)
+
+        c1.metric(
+            "Drift alarms",
+            int(
+                metric_history["alarm"].astype(bool).sum()
+            )
+            if "alarm" in metric_history
+            else 0,
+        )
+
+        c2.metric(
+            "Adapted windows",
+            int(
+                metric_history["adapted"].astype(bool).sum()
+            )
+            if "adapted" in metric_history
+            else 0,
+        )
+
+        c3.metric(
+            "Recovery events",
+            int(
+                metric_history["recovery"].astype(bool).sum()
+            )
+            if "recovery" in metric_history
+            else 0,
+        )
+
+        c4.metric(
+            "Final MAE",
+            f"{metric_history['mae'].iloc[-1]:.3f}"
+            if "mae" in metric_history and not metric_history.empty
+            else "—",
+        )
+
+        fig = make_fig(
+            "Prediction error and adaptation",
+            "MAE",
+            400,
+        )
+
+        # The live history contains one row per strategy.
+        if "strategy" in history.columns:
+            static_hist = history[
+                history["strategy"] == "Static"
+            ]
+            incremental_hist = history[
+                history["strategy"] == "Incremental"
+            ]
+        else:
+            static_hist = pd.DataFrame()
+            incremental_hist = history
+
+        if not static_hist.empty:
+            fig.add_trace(
+                go.Scatter(
+                    x=static_hist["window"],
+                    y=static_hist["mae"],
+                    name="Static",
+                    line=dict(
+                        color=COLORS["static"],
+                        width=2.5,
+                    ),
+                )
+            )
+
+        if not incremental_hist.empty and "mae" in incremental_hist.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=incremental_hist["window"],
+                    y=incremental_hist["mae"],
+                    name="Incremental SGD",
+                    line=dict(
+                        color=COLORS["incremental"],
+                        width=3,
+                    ),
+                )
+            )
+
+        st.plotly_chart(
+            fig,
+            width="stretch",
+        )
+
+        st.dataframe(
+            metric_history[
+                [
+                    c for c in [
+                        "window",
+                        "diagnosis",
+                        "alarm",
+                        "adapted",
+                        "recovery",
+                        "mae",
+                        "rmse",
+                        "r2",
+                        "updates_seen",
+                    ]
+                    if c in history.columns
+                ]
+            ].tail(100),
+            width="stretch",
+            hide_index=True,
+        )
+
+
+# ============================================================
+# DETECTOR EVALUATION
+# ============================================================
+
+with tabs[4]:
+
+    metrics = read_csv(
+        "detector_metrics_summary.csv"
+    )
+
+    if metrics is None or metrics.empty:
+
+        st.info(
+            "Run `run_experiment.py` first to generate "
+            "`detector_metrics_summary.csv`."
+        )
+
+    else:
+
+        st.subheader(
+            "Drift detector performance"
+        )
+
+        st.dataframe(
+            metrics,
+            width="stretch",
+            hide_index=True,
+        )
+
+        st.caption(
+            "Ground-truth drift labels are used only here, "
+            "offline, to evaluate the detector. They are not "
+            "used during prediction, detection, diagnosis, "
+            "or adaptation."
+        )
+
+        type_summary = read_csv("drift_type_summary.csv")
+        if type_summary is not None and not type_summary.empty:
+            st.markdown("### Drift-type diagnosis")
+            st.dataframe(
+                type_summary,
+                width="stretch",
+                hide_index=True,
+            )
+            st.caption(
+                "Episode-level diagnosis checks whether DATA, RELATIONAL, or BOTH "
+                "was identified during the true episode and allowed detection-delay window."
+            )
+
+        by_seed = read_csv(
+            "detector_metrics_by_seed.csv"
+        )
+
+        if by_seed is not None and not by_seed.empty:
+            st.markdown(
+                "### Metrics across random seeds"
+            )
+            st.dataframe(
+                by_seed,
+                width="stretch",
+                hide_index=True,
+            )
+
+
+# ============================================================
+# EVENT LOG
+# ============================================================
+
+with tabs[5]:
+
+    events = read_csv(
+        "detector_events.csv"
+    )
+
+    if events is None or events.empty:
+
+        st.info(
+            "Run `run_experiment.py` first to generate "
+            "`detector_events.csv`."
+        )
+
+    else:
+
+        st.subheader("Detector event log")
+
+        st.dataframe(
+            events,
+            width="stretch",
+            hide_index=True,
+        )
+
+
+# ============================================================
+# LIVE STREAM EXECUTION
+# ============================================================
+# ============================================================
+# LIVE STREAM EXECUTION
+# ============================================================
+#
+# Streamlit reruns the script from top to bottom after every interaction.
+# For a real live dashboard, process ONE window per rerun and keep the
+# runner/history in session_state. This lets the browser receive the
+# updated charts after every window.
+
+if "stream_running" not in st.session_state:
+    st.session_state.stream_running = False
+
+if "stream_finished" not in st.session_state:
     st.session_state.stream_finished = False
-    st.session_state.stream_df = load_data()
+
+if start:
+    with st.spinner(
+        "Generating the synthetic stream and initializing "
+        "incremental/continual learners..."
+    ):
+        st.session_state.stream_df = load_data()
+
     st.session_state.live_runner = StrategyRunner(
         st.session_state.stream_df,
         TRAIN_END,
         WINDOW,
         seed=0,
-        strategies=STRATEGIES,
+        strategies=[
+            "Static",
+            "Incremental",
+            "Continual + replay(100)",
+            "Continual + replay(500)",
+        ],
     )
 
+    st.session_state.history = []
+    st.session_state.events = []
+    st.session_state.stream_index = 0
+    st.session_state.stream_running = True
+    st.session_state.stream_finished = False
 
-# ============================================================
-# TWO-PAGE LAYOUT
-# ============================================================
-
-tab_dashboard, tab_analysis = st.tabs([
-    "● Dashboard",
-    "◎ Evaluation & Analysis",
-])
+    st.rerun()
 
 
-# ============================================================
-# PAGE 1 — DASHBOARD
-# ============================================================
-
-with tab_dashboard:
-    rows = current_rows()
-
-    if not rows:
-        st.info("Click **Start / restart stream** to begin the live dashboard.")
-    else:
-        inc = rows["Incremental"]
-        best_name, best_mae = current_best_model()
-
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("CURRENT WINDOW", int(inc["window"]) + 1)
-        c2.metric("BEST MODEL", best_name)
-        c3.metric("BEST MAE", f"{best_mae:.3f}")
-        c4.metric("DIAGNOSIS", str(inc["diagnosis"]).upper())
-        c5.metric("NEW ALARM", "YES" if bool(inc["alarm"]) else "NO")
-
-        all_history = history_df()
-
-        st.markdown('<div class="section-title">Best model — winner only</div>', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="section-note">At every stream window, only the model with the lowest MAE is plotted.</div>',
-            unsafe_allow_html=True,
-        )
-        st.plotly_chart(
-            add_event_lines(
-                plot_best_model(all_history),
-                st.session_state.events,
-            ),
-            width="stretch",
-            key=f"best_model_{len(all_history)}",
-        )
-
-        st.markdown('<div class="section-title">Model comparison</div>', unsafe_allow_html=True)
-        st.plotly_chart(
-            add_event_lines(
-                plot_all_models(all_history),
-                st.session_state.events,
-            ),
-            width="stretch",
-            key=f"all_models_{len(all_history)}",
-        )
-
-        st.markdown('<div class="section-title">Drift detection</div>', unsafe_allow_html=True)
-        st.plotly_chart(
-            plot_drift_signals(all_history),
-            width="stretch",
-            key=f"drift_{len(all_history)}",
-        )
-
-        inc_hist = strategy_history("Incremental")
-        if not inc_hist.empty:
-            a, b, c = st.columns(3)
-            a.metric("DRIFT ALARMS", int(inc_hist["alarm"].astype(bool).sum()))
-            b.metric("ADAPTATION WINDOWS", int(inc_hist["adapted"].astype(bool).sum()))
-            c.metric("RECOVERY EVENTS", int(inc_hist["recovery"].astype(bool).sum()))
-
-
-# ============================================================
-# PAGE 2 — EVALUATION & ANALYSIS
-
-with tab_analysis:
-    comparison = read_optional_csv("model_comparison.csv")
-    summary = read_optional_csv("detector_metrics_summary.csv")
-
-    st.markdown(
-        """
-        <div class="analysis-head">
-            <div>
-                <div class="eyebrow">Offline research results</div>
-                <div class="analysis-title">Evaluation & Analysis</div>
-                <div class="analysis-subtitle">
-                    Model adaptation performance and event-level drift detection quality across the streaming experiment.
-                    Ground-truth labels remain outside the live decision loop.
-                </div>
-            </div>
-            <div class="head-meta">
-                <div class="meta-chip"><b>Dataset</b> · 60,000 hourly rows</div>
-                <div class="meta-chip"><b>Window</b> · 600 hours</div>
-                <div class="meta-chip"><b>Scoring</b> · Event level</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True
-    )
-
-    # ---------------- Model evaluation ----------------
-    st.markdown('<div class="section-title">Learning strategy performance</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-note">Lower MAE / RMSE is better. Higher R² is better.</div>', unsafe_allow_html=True)
-
-    if comparison is None or comparison.empty:
-        st.info("Run `run_experiment.py` to generate model comparison results.")
-    else:
-        best_mae_row = comparison.loc[comparison["MAE"].idxmin()]
-        best_rmse_row = comparison.loc[comparison["RMSE"].idxmin()]
-        best_r2_row = comparison.loc[comparison["R2"].idxmax()]
-
-        st.markdown(
-            f"""
-            <div class="kpi-grid">
-                <div class="kpi-card blue">
-                    <div class="kpi-label">Best strategy</div>
-                    <div class="kpi-value" style="font-size:1.02rem">{best_mae_row['Strategy']}</div>
-                    <div class="kpi-help">Lowest mean MAE</div>
-                </div>
-                <div class="kpi-card good">
-                    <div class="kpi-label">Best MAE</div>
-                    <div class="kpi-value">{best_mae_row['MAE']:.3f}</div>
-                    <div class="kpi-help">{best_mae_row['Strategy']}</div>
-                </div>
-                <div class="kpi-card">
-                    <div class="kpi-label">Best RMSE</div>
-                    <div class="kpi-value">{best_rmse_row['RMSE']:.3f}</div>
-                    <div class="kpi-help">{best_rmse_row['Strategy']}</div>
-                </div>
-                <div class="kpi-card">
-                    <div class="kpi-label">Best R²</div>
-                    <div class="kpi-value">{best_r2_row['R2']:.3f}</div>
-                    <div class="kpi-help">{best_r2_row['Strategy']}</div>
-                </div>
-            </div>
-            """, unsafe_allow_html=True
-        )
-
-        rows_html = []
-        for _, r in comparison.iterrows():
-            is_best = r["Strategy"] == best_mae_row["Strategy"]
-            cls = "best" if is_best else ""
-            tag = '<span class="best-tag">BEST MAE</span>' if is_best else ''
-            rows_html.append(
-                f'<tr class="{cls}"><td>{r["Strategy"]}{tag}</td>'
-                f'<td>{r["MAE"]:.3f}</td><td>{r["RMSE"]:.3f}</td>'
-                f'<td>{r["R2"]:.3f}</td><td>{int(r["Windows"])}</td></tr>'
-            )
-        st.markdown(
-            """
-            <div class="panel">
-                <div class="panel-title">Strategy comparison</div>
-                <div class="panel-sub">Aggregate performance across the evaluated stream windows.</div>
-                <table class="pro-table">
-                    <thead><tr><th>Strategy</th><th>MAE ↓</th><th>RMSE ↓</th><th>R² ↑</th><th>Windows</th></tr></thead>
-                    <tbody>
-            """ + "".join(rows_html) + """
-                    </tbody>
-                </table>
-            </div>
-            """, unsafe_allow_html=True
-        )
-
-    # ---------------- Recent evidence ----------------
-    st.markdown('<div class="section-title">Recent live detector evidence</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-note">Latest detector outputs from the live stream. Ground truth is intentionally absent.</div>', unsafe_allow_html=True)
-    inc = strategy_history("Incremental")
-    if inc.empty:
-        st.info("Run the live stream to populate detector evidence.")
-    else:
-        log_cols = [c for c in ["window", "diagnosis", "data_alarm", "relational_alarm", "alarm", "adapted", "recovery", "worst_ks", "worst_psi", "ph_stat", "features_moved"] if c in inc.columns]
-        evidence = inc[log_cols].copy().sort_values("window")
-        evidence["window"] = evidence["window"].astype(int) + 1
-        st.caption(f"Showing all {len(evidence)} stream windows. Scroll vertically and horizontally to inspect the complete detector history.")
-        st.dataframe(
-            evidence,
-            width="stretch",
-            height=460,
-            hide_index=True,
-            column_config={
-                "data_alarm": st.column_config.CheckboxColumn("Data alarm"),
-                "relational_alarm": st.column_config.CheckboxColumn("Relational alarm"),
-                "alarm": st.column_config.CheckboxColumn("Alarm"),
-                "adapted": st.column_config.CheckboxColumn("Adapted"),
-                "recovery": st.column_config.CheckboxColumn("Recovery"),
-                "worst_ks": st.column_config.NumberColumn("Worst KS", format="%.4f"),
-                "worst_psi": st.column_config.NumberColumn("Worst PSI", format="%.4f"),
-                "ph_stat": st.column_config.NumberColumn("Page-Hinkley", format="%.4f"),
-            },
-        )
-# ============================================================
-# ONE-WINDOW LIVE EXECUTION
-# ============================================================
+# ------------------------------------------------------------
+# PROCESS EXACTLY ONE WINDOW PER SCRIPT RUN
+# ------------------------------------------------------------
 
 if st.session_state.stream_running:
+
     runner = st.session_state.live_runner
-    data = st.session_state.stream_df
+    stream_df = st.session_state.stream_df
+    windows = runner.windows
+    i = st.session_state.stream_index
 
-    if runner is not None and st.session_state.stream_index < len(runner.windows):
-        i = st.session_state.stream_index
-        s, e = runner.windows[i]
+    if i < len(windows):
+
+        s, e = windows[i]
+
         batch = runner.step(s, e)
-
-        for strategy, row in batch.items():
-            saved = dict(row)
-            saved["strategy"] = strategy
-            st.session_state.history.append(saved)
 
         primary = batch["Incremental"]
 
+        # Save every learning strategy.
+        for strategy_name, row in batch.items():
+            saved_row = dict(row)
+            saved_row["strategy"] = strategy_name
+            st.session_state.history.append(saved_row)
+
+        # Detector/adaptation events are based on the Incremental stream.
         if primary.get("alarm"):
-            st.session_state.events.append({
-                "window": int(primary["window"]),
-                "type": "alarm",
-            })
+            st.session_state.events.append(
+                {
+                    "window": int(primary["window"]),
+                    "type": "alarm",
+                    "diagnosis": str(
+                        primary.get("diagnosis", "")
+                    ),
+                }
+            )
+
+        if primary.get("data_alarm"):
+            st.session_state.events.append(
+                {
+                    "window": int(primary["window"]),
+                    "type": "data_on",
+                    "diagnosis": str(primary.get("diagnosis", "")),
+                }
+            )
+
+        if primary.get("relational_alarm"):
+            st.session_state.events.append(
+                {
+                    "window": int(primary["window"]),
+                    "type": "relational_on",
+                    "diagnosis": str(primary.get("diagnosis", "")),
+                }
+            )
 
         if primary.get("adapted"):
-            st.session_state.events.append({
-                "window": int(primary["window"]),
-                "type": "adapt",
-            })
+            st.session_state.events.append(
+                {
+                    "window": int(primary["window"]),
+                    "type": "adapt",
+                    "diagnosis": str(
+                        primary.get("diagnosis", "")
+                    ),
+                }
+            )
+
+        if show_truth:
+            truth_events_now = build_truth_events(stream_df)
+
+            for event in truth_events_now:
+                if event["window"] == primary["window"]:
+                    if not any(
+                        x["type"] == "truth"
+                        and x["window"] == event["window"]
+                        for x in st.session_state.events
+                    ):
+                        st.session_state.events.append(event)
 
         st.session_state.stream_index += 1
 
-        if st.session_state.stream_index >= len(runner.windows):
+        # If this was the final window, stop after displaying it.
+        if st.session_state.stream_index >= len(windows):
             st.session_state.stream_running = False
             st.session_state.stream_finished = True
-        else:
-            time.sleep(max(0.05, float(delay)))
 
+
+# ------------------------------------------------------------
+# RENDER THE CURRENT LIVE STATE
+# ------------------------------------------------------------
+
+if st.session_state.history:
+
+    history = pd.DataFrame(
+        st.session_state.history
+    )
+
+    primary_history = history[
+        history["strategy"] == "Incremental"
+    ].copy()
+
+    latest = primary_history.iloc[-1]
+
+    # Current metrics.
+    current_rows = {
+        strategy: history[
+            history["strategy"] == strategy
+        ].iloc[-1]
+        for strategy in [
+            "Static",
+            "Incremental",
+            "Continual + replay(100)",
+            "Continual + replay(500)",
+        ]
+        if not history[
+            history["strategy"] == strategy
+        ].empty
+    }
+
+    metric_cols = st.columns(6)
+
+    metric_cols[0].metric(
+        "CURRENT WINDOW",
+        int(latest["window"]) + 1,
+    )
+
+    drift_active = bool(latest.get("drift_active", str(latest["diagnosis"]).lower() != "none"))
+
+    metric_cols[1].metric(
+        "DRIFT STATUS",
+        "ACTIVE" if drift_active else "NORMAL",
+        help="ACTIVE means data or relational drift is currently active. NEW ALARM is shown separately below.",
+    )
+
+    metric_cols[2].metric(
+        "DIAGNOSIS",
+        str(latest["diagnosis"]).upper(),
+    )
+
+    metric_cols[3].metric(
+        "NEW ALARM",
+        "YES" if bool(latest["alarm"]) else "NO",
+        help="YES only when a new contiguous drift episode starts. NO does not mean drift is absent.",
+    )
+
+    metric_cols[4].metric(
+        "INCREMENTAL MAE",
+        f"{current_rows['Incremental']['mae']:.3f}",
+    )
+
+    metric_cols[5].metric(
+        "INCREMENTAL R²",
+        f"{current_rows['Incremental']['r2']:.3f}",
+    )
+
+    # --------------------------------------------------------
+    # CHART 1: LEARNING BEHAVIOUR
+    # --------------------------------------------------------
+
+    model_fig = make_fig(
+        "Live learning behaviour",
+        "MAE",
+        430,
+    )
+
+    chart_specs = [
+        (
+            "Static",
+            "Static — no adaptation",
+            COLORS["static"],
+            2.5,
+        ),
+        (
+            "Incremental",
+            "Incremental SGD",
+            COLORS["incremental"],
+            3,
+        ),
+        (
+            "Continual + replay(100)",
+            "Continual + Replay 100",
+            "#2563EB",
+            2.5,
+        ),
+        (
+            "Continual + replay(500)",
+            "Continual + Replay 500",
+            "#9333EA",
+            2.5,
+        ),
+    ]
+
+    for strategy, label, color, width in chart_specs:
+
+        h = history[
+            history["strategy"] == strategy
+        ]
+
+        if not h.empty:
+            model_fig.add_trace(
+                go.Scatter(
+                    x=h["window"],
+                    y=h["mae"],
+                    mode="lines+markers",
+                    name=label,
+                    line=dict(
+                        color=color,
+                        width=width,
+                    ),
+                    marker=dict(size=4),
+                )
+            )
+
+    model_fig = add_event_lines(
+        model_fig,
+        st.session_state.events,
+        show_truth,
+    )
+
+    st.plotly_chart(
+        model_fig,
+        width="stretch",
+        key=f"live_model_chart_{len(history)}",
+    )
+
+    # --------------------------------------------------------
+    # CHART 2: DRIFT DETECTION
+    # --------------------------------------------------------
+
+    drift_fig = make_fig(
+        "Live drift detection",
+        "Signal",
+        400,
+    )
+
+    drift_fig.add_trace(
+        go.Scatter(
+            x=primary_history["window"],
+            y=primary_history["worst_ks"],
+            mode="lines+markers",
+            name="Worst KS",
+            line=dict(
+                color=COLORS["data"],
+                width=2.5,
+            ),
+            marker=dict(size=3),
+        )
+    )
+
+    drift_fig.add_trace(
+        go.Scatter(
+            x=primary_history["window"],
+            y=primary_history["worst_psi"],
+            mode="lines+markers",
+            name="Worst PSI",
+            line=dict(
+                color=COLORS["relational"],
+                width=2.5,
+            ),
+            marker=dict(size=3),
+        )
+    )
+
+    drift_fig.add_trace(
+        go.Scatter(
+            x=primary_history["window"],
+            y=primary_history["ph_stat"],
+            mode="lines+markers",
+            name="Page-Hinkley",
+            line=dict(
+                color=COLORS["alarm"],
+                width=2.5,
+            ),
+            marker=dict(size=3),
+        )
+    )
+
+    drift_fig = add_event_lines(
+        drift_fig,
+        st.session_state.events,
+        show_truth,
+    )
+
+    st.plotly_chart(
+        drift_fig,
+        width="stretch",
+        key=f"live_drift_chart_{len(history)}",
+    )
+
+    # --------------------------------------------------------
+    # LIVE STATUS
+    # --------------------------------------------------------
+
+    total_windows = (
+        len(st.session_state.live_runner.windows)
+        if st.session_state.live_runner is not None
+        else 0
+    )
+
+    if st.session_state.stream_running:
+
+        progress = (
+            st.session_state.stream_index
+            / max(1, total_windows)
+        )
+
+        st.progress(
+            progress,
+            text=(
+                f"Live window "
+                f"{st.session_state.stream_index}/{total_windows} "
+                f"• Drift: {'ACTIVE' if drift_active else 'NORMAL'} "
+                f"• {str(latest['diagnosis']).upper()} "
+                f"• New alarm: "
+                f"{'YES' if latest['alarm'] else 'NO'} "
+                f"• Adapted: "
+                f"{'YES' if latest['adapted'] else 'NO'}"
+            ),
+        )
+
+        # Wait a little, then trigger the next window. The browser has
+        # already rendered the current charts before the next rerun.
+        time.sleep(max(0.05, float(delay)))
         st.rerun()
+
+    elif st.session_state.stream_finished:
+
+        st.success(
+            f"✓ Live stream completed — "
+            f"{total_windows} windows processed."
+        )
+
+elif not st.session_state.stream_running:
+
+    st.info(
+        "Click **Start / restart live stream** to begin. "
+        "The charts will update window-by-window like a live monitor."
+    )
