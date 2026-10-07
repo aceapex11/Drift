@@ -361,49 +361,102 @@ def add_drift_regions(fig, inc_history):
     return fig
 
 
-def add_time_drift_regions(fig, inc_history, x_column="timestamp"):
-    """Shade drift regions on timestamp charts using detector diagnosis."""
+
+def _drift_episodes(inc_history):
+    """Merge consecutive detector windows into clean drift episodes."""
     if inc_history is None or inc_history.empty or "diagnosis" not in inc_history.columns:
-        return fig
+        return []
 
+    d = inc_history.copy().sort_values("window").reset_index(drop=True)
+    d["diagnosis"] = d["diagnosis"].astype(str).str.lower()
+    d = d[d["diagnosis"].isin(["data", "relational", "both"])].copy()
+    if d.empty:
+        return []
+
+    episodes = []
+    current = None
+
+    for _, r in d.iterrows():
+        diagnosis = r["diagnosis"]
+        window = int(r["window"])
+        start_ts = pd.to_datetime(r.get("timestamp_start"), errors="coerce")
+        end_ts = pd.to_datetime(r.get("timestamp_end"), errors="coerce")
+
+        if pd.isna(start_ts) or pd.isna(end_ts):
+            continue
+
+        if (
+            current is not None
+            and diagnosis == current["diagnosis"]
+            and window == current["last_window"] + 1
+        ):
+            current["end"] = end_ts
+            current["last_window"] = window
+        else:
+            if current is not None:
+                episodes.append(current)
+            current = {
+                "diagnosis": diagnosis,
+                "start": start_ts,
+                "end": end_ts,
+                "first_window": window,
+                "last_window": window,
+            }
+
+    if current is not None:
+        episodes.append(current)
+
+    return episodes
+
+
+def add_time_drift_regions(fig, inc_history):
+    """Shade merged detector-diagnosed drift episodes on timestamp charts."""
     colors = {
-        "data": "rgba(2,132,199,0.09)",
-        "relational": "rgba(124,58,237,0.09)",
-        "both": "rgba(220,38,38,0.10)",
+        "data": "rgba(2,132,199,0.075)",
+        "relational": "rgba(124,58,237,0.075)",
+        "both": "rgba(220,38,38,0.085)",
     }
-    labels = {"data": "Detected data drift", "relational": "Detected relational drift", "both": "Detected both"}
-    added = set()
+    labels = {
+        "data": "Data drift",
+        "relational": "Relational drift",
+        "both": "Both",
+    }
 
-    for _, r in inc_history.sort_values("window").iterrows():
-        diagnosis = str(r.get("diagnosis", "none")).lower()
-        if diagnosis not in colors:
-            continue
-        start = r.get("timestamp_start")
-        end = r.get("timestamp_end")
-        if pd.isna(start) or pd.isna(end):
-            continue
+    added = set()
+    for ep in _drift_episodes(inc_history):
+        diagnosis = ep["diagnosis"]
         fig.add_vrect(
-            x0=start,
-            x1=end,
+            x0=ep["start"],
+            x1=ep["end"],
             fillcolor=colors[diagnosis],
             line_width=0,
             layer="below",
-            name=labels[diagnosis] if diagnosis not in added else None,
+            annotation_text=None,
         )
-        added.add(diagnosis)
+        # One compact legend trace for each drift type.
+        if diagnosis not in added:
+            fig.add_trace(go.Scatter(
+                x=[None], y=[None], mode="lines",
+                name=labels[diagnosis],
+                line=dict(color=colors[diagnosis].replace("0.075", "0.55").replace("0.085", "0.55"), width=8),
+                hoverinfo="skip",
+            ))
+            added.add(diagnosis)
+
     return fig
 
 
 def add_prediction_event_lines(fig, inc_history):
-    """Add adaptation lines and compact detector event markers to time charts."""
+    """Add alarm/adaptation markers without creating dozens of duplicate lines."""
     if inc_history is None or inc_history.empty:
         return fig
 
     added = set()
     for _, r in inc_history.sort_values("window").iterrows():
-        ts = r.get("timestamp_end")
+        ts = pd.to_datetime(r.get("timestamp_end"), errors="coerce")
         if pd.isna(ts):
             continue
+
         if bool(r.get("alarm", False)):
             if "alarm" not in added:
                 fig.add_trace(go.Scatter(
@@ -411,7 +464,11 @@ def add_prediction_event_lines(fig, inc_history):
                     line=dict(color=COLORS["alarm"], width=2, dash="solid"),
                 ))
                 added.add("alarm")
-            fig.add_vline(x=ts, line_color=COLORS["alarm"], line_width=1.3, opacity=0.8)
+            fig.add_vline(
+                x=ts, line_color=COLORS["alarm"], line_width=1.2,
+                opacity=0.75
+            )
+
         if bool(r.get("adapted", False)):
             if "adapt" not in added:
                 fig.add_trace(go.Scatter(
@@ -419,8 +476,35 @@ def add_prediction_event_lines(fig, inc_history):
                     line=dict(color=COLORS["adapt"], width=2, dash="dot"),
                 ))
                 added.add("adapt")
-            fig.add_vline(x=ts, line_color=COLORS["adapt"], line_dash="dot", line_width=1.2, opacity=0.8)
+            fig.add_vline(
+                x=ts, line_color=COLORS["adapt"], line_dash="dot",
+                line_width=1.2, opacity=0.8
+            )
+
     return fig
+
+
+def _time_reduce(d, value_cols, resolution="Daily mean", max_points=1800):
+    """Reduce dense hourly streams to a readable time-series resolution."""
+    if d is None or d.empty:
+        return d
+
+    out = d.copy()
+    out["timestamp"] = pd.to_datetime(out["timestamp"], errors="coerce")
+    out = out.dropna(subset=["timestamp"]).sort_values("timestamp")
+
+    if resolution == "Raw":
+        if len(out) <= max_points:
+            return out
+        # Preserve the whole time span while keeping Plotly responsive.
+        idx = pd.Series(range(len(out))).iloc[
+            list(map(int, __import__("numpy").linspace(0, len(out) - 1, max_points)))
+        ].unique()
+        return out.iloc[idx].copy()
+
+    rule = "D" if resolution == "Daily mean" else "7D"
+    agg = out.set_index("timestamp")[value_cols].resample(rule).mean().reset_index()
+    return agg.dropna(subset=value_cols, how="all")
 
 
 def feature_timestamp_history(df, end_row):
@@ -431,69 +515,134 @@ def feature_timestamp_history(df, end_row):
     return df.iloc[:end_row][cols].copy()
 
 
-def plot_feature_timeline(df, inc_history, feature, height=390):
+def plot_feature_timeline(df, inc_history, feature, resolution="Daily mean", height=300):
     fig = go.Figure()
     if df is None or df.empty or feature not in df.columns:
-        return base_fig("Feature timeline", feature, height)
+        return fig
 
-    end_row = int(inc_history["end"].max()) if inc_history is not None and not inc_history.empty and "end" in inc_history.columns else len(df)
+    end_row = (
+        int(inc_history["end"].max())
+        if inc_history is not None and not inc_history.empty and "end" in inc_history.columns
+        else len(df)
+    )
     d = feature_timestamp_history(df, end_row)
+    d = _time_reduce(d, [feature], resolution)
+
     fig.add_trace(go.Scatter(
-        x=d["timestamp"], y=d[feature], mode="lines", name=feature,
-        line=dict(color=COLORS["data"], width=1.8),
-        hovertemplate="Time %{x}<br>" + feature + ": %{y:.3f}<extra></extra>",
+        x=d["timestamp"], y=d[feature], mode="lines",
+        name=feature, line=dict(color=COLORS["data"], width=1.7),
+        hovertemplate="Time %{x|%d %b %Y %H:%M}<br>" +
+                      feature + ": %{y:.3f}<extra></extra>",
     ))
     add_time_drift_regions(fig, inc_history)
     add_prediction_event_lines(fig, inc_history)
+
     fig.update_layout(
-        title=dict(text=f"Feature timeline — {feature}", x=0.01, xanchor="left", font=dict(size=16)),
-        template="plotly_white", paper_bgcolor=COLORS["panel"], plot_bgcolor=COLORS["panel"],
-        font=dict(color=COLORS["text"]), height=height,
-        margin=dict(l=48, r=28, t=58, b=42), hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=10)),
-        xaxis=dict(title="Time", gridcolor=COLORS["grid"], zeroline=False),
-        yaxis=dict(title=feature, gridcolor=COLORS["grid"], zeroline=False),
+        title=dict(text=feature, x=0.01, xanchor="left", font=dict(size=13)),
+        template="plotly_white",
+        paper_bgcolor=COLORS["panel"],
+        plot_bgcolor=COLORS["panel"],
+        font=dict(color=COLORS["text"]),
+        height=height,
+        margin=dict(l=42, r=18, t=42, b=35),
+        hovermode="x unified",
+        showlegend=False,
+        xaxis=dict(title=None, gridcolor=COLORS["grid"], zeroline=False),
+        yaxis=dict(title=None, gridcolor=COLORS["grid"], zeroline=False),
     )
     return fig
 
 
-def plot_target_models(inc_history, height=430):
+def prediction_df():
+    records = st.session_state.get("prediction_history", [])
+    if not records:
+        return pd.DataFrame()
+
+    rows = []
+    for rec in records:
+        timestamps = rec.get("timestamps", [])
+        actual = rec.get("actual", [])
+        predicted = rec.get("predicted", [])
+        n = min(len(timestamps), len(actual), len(predicted))
+        for j in range(n):
+            rows.append({
+                "timestamp": timestamps[j],
+                "window": rec["window"],
+                "strategy": rec["strategy"],
+                "actual": actual[j],
+                "predicted": predicted[j],
+            })
+    return pd.DataFrame(rows) if rows else pd.DataFrame()
+
+
+def plot_target_models(inc_history, resolution="Daily mean", height=500):
     fig = go.Figure()
     p = prediction_df()
     if p.empty:
-        fig.update_layout(title="Target timeline — actual vs all models")
+        fig.update_layout(title="Target timeline — waiting for live predictions")
         return fig
 
+    p["timestamp"] = pd.to_datetime(p["timestamp"], errors="coerce")
+    p = p.dropna(subset=["timestamp"])
+
+    # Reduce each strategy independently so the plot remains readable.
+    reduced = []
     for strategy in STRATEGIES:
-        h = p[p["strategy"] == strategy]
+        h = p[p["strategy"] == strategy][["timestamp", "predicted"]].copy()
         if h.empty:
+            continue
+        h = _time_reduce(h, ["predicted"], resolution)
+        h["strategy"] = strategy
+        reduced.append(h)
+
+    actual = p[["timestamp", "actual"]].drop_duplicates("timestamp")
+    actual = _time_reduce(actual, ["actual"], resolution)
+
+    for strategy in STRATEGIES:
+        h = next((x for x in reduced if x["strategy"].iloc[0] == strategy), None)
+        if h is None or h.empty:
             continue
         fig.add_trace(go.Scatter(
             x=h["timestamp"], y=h["predicted"], mode="lines",
             name=STRATEGY_LABELS[strategy],
-            line=dict(color=STRATEGY_COLORS[strategy], width=1.7 if strategy != "Incremental" else 2.4),
-            opacity=0.88,
+            line=dict(
+                color=STRATEGY_COLORS[strategy],
+                width=1.5 if strategy != "Incremental" else 2.0
+            ),
+            opacity=0.78,
         ))
 
-    # Actual target is identical for all strategies, so draw it once on top.
-    actual = p[["timestamp", "actual"]].drop_duplicates("timestamp").sort_values("timestamp")
+    # Actual is deliberately the strongest line.
     fig.add_trace(go.Scatter(
-        x=actual["timestamp"], y=actual["actual"], mode="lines", name="Actual target",
-        line=dict(color=COLORS["text"], width=2.4),
+        x=actual["timestamp"], y=actual["actual"], mode="lines",
+        name="Actual target",
+        line=dict(color="#111827", width=2.8),
     ))
 
     add_time_drift_regions(fig, inc_history)
     add_prediction_event_lines(fig, inc_history)
+
     fig.update_layout(
-        title=dict(text="Target timeline — actual vs all models", x=0.01, xanchor="left", font=dict(size=16)),
-        template="plotly_white", paper_bgcolor=COLORS["panel"], plot_bgcolor=COLORS["panel"],
-        font=dict(color=COLORS["text"]), height=height,
-        margin=dict(l=48, r=28, t=58, b=42), hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=10)),
+        title=dict(
+            text="Health deterioration — actual vs all models",
+            x=0.01, xanchor="left", font=dict(size=15)
+        ),
+        template="plotly_white",
+        paper_bgcolor=COLORS["panel"],
+        plot_bgcolor=COLORS["panel"],
+        font=dict(color=COLORS["text"]),
+        height=height,
+        margin=dict(l=48, r=24, t=64, b=42),
+        hovermode="x unified",
+        legend=dict(
+            orientation="h", yanchor="bottom", y=1.02,
+            xanchor="left", x=0, font=dict(size=9)
+        ),
         xaxis=dict(title="Time", gridcolor=COLORS["grid"], zeroline=False),
         yaxis=dict(title=TARGET, gridcolor=COLORS["grid"], zeroline=False),
     )
     return fig
+
 
 def add_event_lines(fig, events):
     seen = set()
@@ -724,17 +873,18 @@ if start:
 
 
 # ============================================================
-# TWO-PAGE LAYOUT
+# THREE-PAGE LAYOUT
 # ============================================================
 
-tab_dashboard, tab_analysis = st.tabs([
-    "● Dashboard",
-    "◎ Evaluation & Analysis",
+tab_dashboard, tab_features, tab_target = st.tabs([
+    "● Live Monitor",
+    "◫ Feature Analysis",
+    "◒ Target & Evaluation",
 ])
 
 
 # ============================================================
-# PAGE 1 — DASHBOARD
+# PAGE 1 — LIVE MONITOR
 # ============================================================
 
 with tab_dashboard:
@@ -746,40 +896,33 @@ with tab_dashboard:
         inc = rows["Incremental"]
         best_name, best_mae = current_best_model()
 
+        drift_active = str(inc.get("diagnosis", "none")).lower() != "none"
+
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("CURRENT WINDOW", int(inc["window"]) + 1)
         c2.metric("BEST MODEL", best_name)
         c3.metric("BEST MAE", f"{best_mae:.3f}")
-        c4.metric("DIAGNOSIS", str(inc["diagnosis"]).upper())
-        c5.metric("NEW ALARM", "YES" if bool(inc["alarm"]) else "NO")
+        c4.metric("DRIFT STATUS", "ACTIVE" if drift_active else "NORMAL")
+        c5.metric("DIAGNOSIS", str(inc["diagnosis"]).upper())
 
         all_history = history_df()
 
         st.markdown('<div class="section-title">Best model — winner only</div>', unsafe_allow_html=True)
         st.markdown(
-            '<div class="section-note">At every stream window, only the model with the lowest MAE is plotted.</div>',
+            '<div class="section-note">Only the lowest-MAE strategy is shown at each live window.</div>',
             unsafe_allow_html=True,
         )
         st.plotly_chart(
-            add_event_lines(
-                plot_best_model(all_history),
-                st.session_state.events,
-            ),
+            add_event_lines(plot_best_model(all_history), st.session_state.events),
             width="stretch",
             key=f"best_model_{len(all_history)}",
         )
 
-        st.markdown('<div class="section-title">Model comparison</div>', unsafe_allow_html=True)
-        st.plotly_chart(
-            add_event_lines(
-                plot_all_models(all_history),
-                st.session_state.events,
-            ),
-            width="stretch",
-            key=f"all_models_{len(all_history)}",
+        st.markdown('<div class="section-title">Drift detector signals</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="section-note">KS / PSI identify feature-distribution movement; Page-Hinkley monitors relational error behaviour.</div>',
+            unsafe_allow_html=True,
         )
-
-        st.markdown('<div class="section-title">Drift detection</div>', unsafe_allow_html=True)
         st.plotly_chart(
             plot_drift_signals(all_history),
             width="stretch",
@@ -787,71 +930,171 @@ with tab_dashboard:
         )
 
         inc_hist = strategy_history("Incremental")
-
-        st.markdown('<div class="section-title">Feature timeline</div>', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="section-note">Select any machine column. Blue/purple/red background shows detected data / relational / both drift; teal markers show adaptation.</div>',
-            unsafe_allow_html=True,
-        )
-        feature = st.selectbox(
-            "Feature column",
-            list(FEATURES),
-            key="feature_column",
-            label_visibility="collapsed",
-        )
-        st.plotly_chart(
-            plot_feature_timeline(st.session_state.stream_df, inc_hist, feature),
-            width="stretch",
-            key=f"feature_{feature}_{len(all_history)}",
-        )
-
-        st.markdown('<div class="section-title">Target timeline — actual vs all models</div>', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="section-note">Actual target plus every live learning strategy. The same detected drift and adaptation markers are overlaid.</div>',
-            unsafe_allow_html=True,
-        )
-        st.plotly_chart(
-            plot_target_models(inc_hist),
-            width="stretch",
-            key=f"target_models_{len(all_history)}",
-        )
         if not inc_hist.empty:
-            a, b, c = st.columns(3)
+            a, b, c, d = st.columns(4)
             a.metric("DRIFT ALARMS", int(inc_hist["alarm"].astype(bool).sum()))
             b.metric("ADAPTATION WINDOWS", int(inc_hist["adapted"].astype(bool).sum()))
             c.metric("RECOVERY EVENTS", int(inc_hist["recovery"].astype(bool).sum()))
+            d.metric("WINDOWS PROCESSED", len(inc_hist))
 
 
 # ============================================================
-# PAGE 2 — EVALUATION & ANALYSIS
+# PAGE 2 — FEATURE ANALYSIS
+# ============================================================
 
-with tab_analysis:
-    comparison = read_optional_csv("model_comparison.csv")
-    summary = read_optional_csv("detector_metrics_summary.csv")
-
+with tab_features:
     st.markdown(
         """
         <div class="analysis-head">
             <div>
-                <div class="eyebrow">Offline research results</div>
-                <div class="analysis-title">Evaluation & Analysis</div>
+                <div class="eyebrow">Machine telemetry</div>
+                <div class="analysis-title">Feature behaviour over time</div>
                 <div class="analysis-subtitle">
-                    Model adaptation performance and event-level drift detection quality across the streaming experiment.
-                    Ground-truth labels remain outside the live decision loop.
+                    Inspect one machine variable or all eight variables. Drift is shown as a background episode,
+                    while alarms and adaptations are shown as vertical event markers.
                 </div>
             </div>
             <div class="head-meta">
-                <div class="meta-chip"><b>Dataset</b> · 60,000 hourly rows</div>
-                <div class="meta-chip"><b>Window</b> · 600 hours</div>
-                <div class="meta-chip"><b>Scoring</b> · Event level</div>
+                <div class="meta-chip"><b>Features</b> · 8</div>
+                <div class="meta-chip"><b>Time</b> · 2018–2024</div>
+                <div class="meta-chip"><b>Default</b> · Daily mean</div>
             </div>
         </div>
-        """, unsafe_allow_html=True
+        """,
+        unsafe_allow_html=True,
     )
 
-    # ---------------- Model evaluation ----------------
-    st.markdown('<div class="section-title">Learning strategy performance</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-note">Lower MAE / RMSE is better. Higher R² is better.</div>', unsafe_allow_html=True)
+    st.markdown(
+        """
+        <div class="method-card">
+            <b>How to read this page:</b>
+            <span style="color:#0284C7;font-weight:700"> blue background = detected data drift</span> ·
+            <span style="color:#7C3AED;font-weight:700"> purple = detected relational drift</span> ·
+            <span style="color:#DC2626;font-weight:700"> red = both</span> ·
+            <span style="color:#0F766E;font-weight:700"> teal dotted line = adaptation</span> ·
+            <span style="color:#C77700;font-weight:700"> amber line = new alarm</span>.
+            The background is the detector's diagnosis, not the raw sensor value.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    feature_options = ["All features"] + [f for f in FEATURES if f != "operating_hours"] + ["operating_hours"]
+    feature_choice = st.selectbox(
+        "Feature view",
+        feature_options,
+        index=0,
+        key="feature_view_choice",
+    )
+    resolution = st.selectbox(
+        "Display resolution",
+        ["Daily mean", "Weekly mean", "Raw"],
+        index=0,
+        key="feature_resolution",
+        help="Daily/weekly views reduce visual noise. Raw keeps individual hourly readings.",
+    )
+
+    inc_hist = strategy_history("Incremental")
+    df_live = st.session_state.stream_df
+
+    if df_live is None:
+        st.info("Start the stream first. Feature charts will then use the data observed by the live runner.")
+    elif feature_choice == "All features":
+        st.markdown(
+            '<div class="section-note">Each panel has its own y-axis, so features with different units are not forced onto one scale.</div>',
+            unsafe_allow_html=True,
+        )
+
+        feature_cols = [f for f in FEATURES if f in df_live.columns]
+        for i in range(0, len(feature_cols), 2):
+            cols = st.columns(2)
+            for j, col in enumerate(feature_cols[i:i+2]):
+                with cols[j]:
+                    st.plotly_chart(
+                        plot_feature_timeline(
+                            df_live, inc_hist, col,
+                            resolution=resolution, height=285
+                        ),
+                        width="stretch",
+                        key=f"feature_all_{col}_{resolution}_{len(st.session_state.history)}",
+                    )
+    else:
+        st.plotly_chart(
+            plot_feature_timeline(
+                df_live, inc_hist, feature_choice,
+                resolution=resolution, height=470
+            ),
+            width="stretch",
+            key=f"feature_single_{feature_choice}_{resolution}_{len(st.session_state.history)}",
+        )
+
+
+# ============================================================
+# PAGE 3 — TARGET & EVALUATION
+# ============================================================
+
+with tab_target:
+    st.markdown(
+        """
+        <div class="analysis-head">
+            <div>
+                <div class="eyebrow">Regression outcome</div>
+                <div class="analysis-title">Health deterioration over time</div>
+                <div class="analysis-subtitle">
+                    Compare the actual target with every learning strategy while keeping drift and adaptation
+                    events on the same timeline.
+                </div>
+            </div>
+            <div class="head-meta">
+                <div class="meta-chip"><b>Target</b> · health_deterioration</div>
+                <div class="meta-chip"><b>Models</b> · 4</div>
+                <div class="meta-chip"><b>Default</b> · Daily mean</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    target_resolution = st.selectbox(
+        "Target display resolution",
+        ["Daily mean", "Weekly mean", "Raw"],
+        index=0,
+        key="target_resolution",
+        help="Daily/weekly means make the actual-vs-model comparison readable. Raw shows every hourly prediction.",
+    )
+
+    inc_hist = strategy_history("Incremental")
+
+    st.markdown(
+        """
+        <div class="method-card">
+            <b>Target chart:</b> dark navy = actual target; grey = Static; green = Incremental SGD;
+            blue = Replay 100; purple = Replay 500. Background colours are detector diagnoses,
+            not target classes. Vertical amber lines are new alarms and teal dotted lines are adaptations.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.plotly_chart(
+        plot_target_models(
+            inc_hist,
+            resolution=target_resolution,
+            height=520,
+        ),
+        width="stretch",
+        key=f"target_models_{target_resolution}_{len(st.session_state.prediction_history)}",
+    )
+
+    # ---------------- Offline evaluation ----------------
+    comparison = read_optional_csv("model_comparison.csv")
+    summary = read_optional_csv("detector_metrics_summary.csv")
+
+    st.markdown('<div class="section-title">Offline evaluation</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-note">Aggregate model performance and detector evidence. Ground truth is used only here, never in the live detector.</div>',
+        unsafe_allow_html=True,
+    )
 
     if comparison is None or comparison.empty:
         st.info("Run `run_experiment.py` to generate model comparison results.")
@@ -884,7 +1127,8 @@ with tab_analysis:
                     <div class="kpi-help">{best_r2_row['Strategy']}</div>
                 </div>
             </div>
-            """, unsafe_allow_html=True
+            """,
+            unsafe_allow_html=True,
         )
 
         rows_html = []
@@ -909,24 +1153,28 @@ with tab_analysis:
                     </tbody>
                 </table>
             </div>
-            """, unsafe_allow_html=True
+            """,
+            unsafe_allow_html=True,
         )
 
-    # ---------------- Recent evidence ----------------
-    st.markdown('<div class="section-title">Recent live detector evidence</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-note">Latest detector outputs from the live stream. Ground truth is intentionally absent.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Detector evidence</div>', unsafe_allow_html=True)
     inc = strategy_history("Incremental")
     if inc.empty:
         st.info("Run the live stream to populate detector evidence.")
     else:
-        log_cols = [c for c in ["window", "diagnosis", "data_alarm", "relational_alarm", "alarm", "adapted", "recovery", "worst_ks", "worst_psi", "ph_stat", "features_moved"] if c in inc.columns]
+        log_cols = [
+            c for c in [
+                "window", "diagnosis", "data_alarm", "relational_alarm",
+                "alarm", "adapted", "recovery", "worst_ks", "worst_psi",
+                "ph_stat", "features_moved"
+            ] if c in inc.columns
+        ]
         evidence = inc[log_cols].copy().sort_values("window")
         evidence["window"] = evidence["window"].astype(int) + 1
-        st.caption(f"Showing all {len(evidence)} stream windows. Scroll vertically and horizontally to inspect the complete detector history.")
         st.dataframe(
             evidence,
             width="stretch",
-            height=460,
+            height=400,
             hide_index=True,
             column_config={
                 "data_alarm": st.column_config.CheckboxColumn("Data alarm"),
@@ -939,6 +1187,7 @@ with tab_analysis:
                 "ph_stat": st.column_config.NumberColumn("Page-Hinkley", format="%.4f"),
             },
         )
+
 # ============================================================
 # ONE-WINDOW LIVE EXECUTION
 # ============================================================
