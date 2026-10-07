@@ -28,17 +28,20 @@ from sklearn.preprocessing import PolynomialFeatures, StandardScaler
 
 from data_generator import FEATURES, MONITORED, TARGET
 
-# Moderate detector thresholds. These are deliberately exposed as constants so they
-# can be tuned offline without changing the live detection logic.
-KS_FLOOR = 0.15
-PSI_THRESHOLD = 0.25
-PH_PARAMS = dict(min_instances=100, delta=0.5, threshold=50.0, alpha=0.9999)
+# Responsive drift-detector settings.  The model still evaluates each 600-hour
+# stream batch, but drift is checked internally on smaller sub-windows so that
+# a change can be detected earlier.  Thresholds are intentionally moderate:
+# sensitivity is increased without making a single noisy feature an alarm.
+KS_FLOOR = 0.10
+PSI_THRESHOLD = 0.15
+PH_PARAMS = dict(min_instances=50, delta=0.25, threshold=25.0, alpha=0.9999)
 
-# A genuine sensor-distribution drift should affect several monitored
-# variables and persist beyond one isolated window.  These guards reduce
-# false alarms from ordinary variation and the 12-row sensor glitch.
-DATA_DRIFT_MIN_FEATURES = 3
+# Data drift is confirmed when at least two monitored features move in the
+# same detector sub-window.  A 100-hour detector sub-window makes detection
+# substantially faster than waiting for the full 600-hour model window.
+DATA_DRIFT_MIN_FEATURES = 2
 DATA_DRIFT_CONFIRM_WINDOWS = 2
+DETECTOR_WINDOW = 100
 
 RESID_CLIP = 4.0
 RULE_BACK = 1.25
@@ -410,86 +413,142 @@ class SGDStreamEngine:
         )
 
     def _detect(self, Xb, yb):
-        ks = {
-            f: float(
-                ks_2samp(
+        """Detect data and relational drift with a fast sub-window scan.
+
+        Xb/yb are normally one 600-hour model batch.  The detector scans that
+        batch in smaller DETECTOR_WINDOW chunks.  This gives KS/PSI and
+        Page-Hinkley a finer detection resolution while the model metrics still
+        use the complete model window.
+
+        KS + PSI monitor P(X). Page-Hinkley monitors P(Y|X) through residuals
+        from the frozen reference rule.  The two families are complementary.
+        """
+        n = len(Xb)
+        sub_starts = range(0, n, DETECTOR_WINDOW)
+
+        all_ks = {f: 0.0 for f in MONITORED}
+        all_psis = {f: 0.0 for f in MONITORED}
+        moved_features = set()
+
+        data_alarm = False
+        rel_alarm = False
+        raw_data = False
+        relational_state = self.relational_on
+        first_data_alarm = False
+        first_rel_alarm = False
+        first_alarm_offset = None
+        max_ph = float(self.ph.stat)
+        residual_parts = []
+
+        # Scan the incoming model batch in small detector windows.
+        for a in sub_starts:
+            b = min(a + DETECTOR_WINDOW, n)
+            Xs = Xb[a:b]
+            ys = yb[a:b]
+
+            ks_s = {
+                f: float(
+                    ks_2samp(
+                        self.ref[:, j],
+                        Xs[:, j],
+                    ).statistic
+                )
+                for f, j in zip(MONITORED, self.mon_idx)
+            }
+            psi_s = {
+                f: psi(
                     self.ref[:, j],
-                    Xb[:, j],
-                ).statistic
+                    Xs[:, j],
+                )
+                for f, j in zip(MONITORED, self.mon_idx)
+            }
+
+            for f in MONITORED:
+                all_ks[f] = max(all_ks[f], ks_s[f])
+                all_psis[f] = max(all_psis[f], psi_s[f])
+
+            moved_here = [
+                f for f in MONITORED
+                if (ks_s[f] > self.ks_thr[f])
+                or (psi_s[f] > PSI_THRESHOLD)
+            ]
+            moved_features.update(moved_here)
+
+            data_candidate = len(moved_here) >= DATA_DRIFT_MIN_FEATURES
+
+            if data_candidate:
+                self.data_candidate_streak += 1
+            else:
+                self.data_candidate_streak = 0
+
+            raw_here = (
+                self.data_candidate_streak
+                >= DATA_DRIFT_CONFIRM_WINDOWS
             )
-            for f, j in zip(MONITORED, self.mon_idx)
-        }
 
-        psis = {
-            f: psi(
-                self.ref[:, j],
-                Xb[:, j],
+            if raw_here and not self.data_latched:
+                data_alarm = True
+                first_data_alarm = True
+            raw_data = raw_here
+            self.data_latched = raw_here
+
+            # Frozen-rule residuals for relational drift.
+            rule_pred = self.rule.predict(Xs)
+            resid = np.minimum(
+                np.abs(ys - rule_pred)
+                / self.rule_sd
+                / self.normal_res,
+                RESID_CLIP,
             )
-            for f, j in zip(MONITORED, self.mon_idx)
-        }
+            residual_parts.append(resid)
 
-        # Data drift is treated as a persistent multi-feature event rather
-        # than a single-feature excursion. This prevents isolated noise and
-        # the short sensor glitch from becoming drift alarms.
-        moved_count = sum(
-            (ks[f] > self.ks_thr[f])
-            or (psis[f] > PSI_THRESHOLD)
-            for f in MONITORED
-        )
-        data_candidate = moved_count >= DATA_DRIFT_MIN_FEATURES
+            fired_here = False
+            for value in resid:
+                if self.ph.update(float(value)):
+                    fired_here = True
+                    self.ph.reset()
 
-        if data_candidate:
-            self.data_candidate_streak += 1
-        else:
-            self.data_candidate_streak = 0
+            max_ph = max(max_ph, float(self.ph.stat))
 
-        raw_data = self.data_candidate_streak >= DATA_DRIFT_CONFIRM_WINDOWS
-        data_alarm = raw_data and not self.data_latched
-        self.data_latched = raw_data
+            if fired_here and not self.relational_on:
+                rel_alarm = True
+                first_rel_alarm = True
+                self.relational_on = True
 
-        rule_pred = self.rule.predict(Xb)
-
-        resid = np.minimum(
-            np.abs(yb - rule_pred)
-            / self.rule_sd
-            / self.normal_res,
-            RESID_CLIP,
-        )
-
-        fired = False
-
-        for value in resid:
-            if self.ph.update(float(value)):
-                fired = True
+            if fired_here:
+                relational_state = True
+            elif (
+                self.relational_on
+                and float(resid.mean()) < RULE_BACK
+            ):
+                self.relational_on = False
                 self.ph.reset()
+                relational_state = False
 
-        rel_alarm = fired and not self.relational_on
+            # Stop scanning only after both detector families have produced a
+            # new alarm.  Otherwise keep scanning so recovery/state is correct.
+            if first_alarm_offset is None and (first_data_alarm or first_rel_alarm):
+                first_alarm_offset = a
 
-        if fired:
-            self.relational_on = True
+        # `data_latched` represents the current data-drift state, not the
+        # one-shot alarm.  This lets the detector recover when the distribution
+        # returns to baseline.
+        self.data_latched = bool(raw_data)
 
-        elif (
-            self.relational_on
-            and resid.mean() < RULE_BACK
-        ):
-            self.relational_on = False
-            self.ph.reset()
+        if residual_parts:
+            all_resid = np.concatenate(residual_parts)
+            mean_resid = float(all_resid.mean())
+        else:
+            mean_resid = 0.0
 
         diagnosis = {
             (0, 0): "none",
             (1, 0): "data",
             (0, 1): "relational",
             (1, 1): "both",
-        }[
-            (
-                int(raw_data),
-                int(self.relational_on),
-            )
-        ]
+        }[(int(raw_data), int(self.relational_on))]
 
-        # Treat one contiguous drift episode as one alarm episode. A second
-        # detector signal while the same episode is still active is retained
-        # in the diagnostics but is not emitted as another NEW alarm.
+        # One contiguous drift episode produces one NEW alarm.
         alarm_candidate = data_alarm or rel_alarm
         alarm = alarm_candidate and not self.alarm_episode_latched
 
@@ -503,27 +562,27 @@ class SGDStreamEngine:
 
         if recovery:
             self.alarm_episode_latched = False
+            self.data_candidate_streak = 0
 
         self.prev_diag = diagnosis
 
         return {
-            "ks": ks,
-            "psi": psis,
-            "worst_ks": max(ks.values()) if ks else 0.0,
-            "worst_psi": max(psis.values()) if psis else 0.0,
-            "features_moved": [
-                f
-                for f, value in ks.items()
-                if value > self.ks_thr[f]
-            ],
+            "ks": all_ks,
+            "psi": all_psis,
+            "worst_ks": max(all_ks.values()) if all_ks else 0.0,
+            "worst_psi": max(all_psis.values()) if all_psis else 0.0,
+            "features_moved": sorted(moved_features),
             "data_alarm": bool(data_alarm),
             "relational_alarm": bool(rel_alarm),
             "alarm": bool(alarm),
             "recovery": bool(recovery),
             "diagnosis": diagnosis,
-            "ph_stat": float(self.ph.stat),
-            "mean_resid": float(resid.mean()),
+            "ph_stat": float(max_ph),
+            "mean_resid": mean_resid,
+            "detector_subwindows": int(np.ceil(n / DETECTOR_WINDOW)),
+            "first_alarm_offset": first_alarm_offset,
         }
+
 
     def _adapt(self, Xb, yb, alarm, recovery):
         # A NEW drift alarm starts one adaptation cycle.
@@ -556,10 +615,14 @@ class SGDStreamEngine:
             pred,
         )
 
-        # Detect without ground truth.
+        # Detect without ground truth. Detection scans smaller sub-windows
+        # inside this model batch, so drift can be identified earlier than the
+        # 600-hour model window. Prediction above was completed first, so the
+        # reported metrics remain pre-adaptation and leakage-free.
         det = self._detect(Xb, yb)
 
-        # Adapt only after prediction and detection.
+        # Adapt after prediction and detection. The first alarm can trigger an
+        # adaptation cycle using the current model batch.
         adapted = self._adapt(
             Xb,
             yb,
@@ -584,6 +647,8 @@ class SGDStreamEngine:
             "adapted": bool(adapted),
             "ph_stat": det["ph_stat"],
             "mean_resid": det["mean_resid"],
+            "detector_subwindows": det["detector_subwindows"],
+            "first_alarm_offset": det["first_alarm_offset"],
             "ks": det["ks"],
             "psi": det["psi"],
             "worst_ks": det["worst_ks"],
