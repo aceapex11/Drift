@@ -42,10 +42,6 @@ DATA_DRIFT_CONFIRM_WINDOWS = 2
 
 RESID_CLIP = 4.0
 RULE_BACK = 1.25
-# Residual magnitude guard: data drift can change model residuals even when
-# the X -> y relationship is unchanged. Require a clearly elevated residual
-# level before Page-Hinkley is allowed to declare relational drift.
-RELATIONAL_MEAN_THRESHOLD = 2.25
 ADAPT_WINDOWS = 3
 
 # Reference-notebook settings
@@ -403,7 +399,6 @@ class SGDStreamEngine:
         self.data_candidate_streak = 0
         self.alarm_episode_latched = False
         self.active = 0
-        self.drift_active = False
         self.k = 0
         self.prev_diag = "none"
         self.update_count = 0
@@ -461,7 +456,6 @@ class SGDStreamEngine:
             RESID_CLIP,
         )
 
-        mean_resid = float(resid.mean())
         fired = False
 
         for value in resid:
@@ -469,23 +463,14 @@ class SGDStreamEngine:
                 fired = True
                 self.ph.reset()
 
-        # Page-Hinkley alone can react to residual changes caused by a large
-        # X-distribution shift. The generator's true relational changes are
-        # much larger in residual magnitude (~3+), while pure data drift stays
-        # around ~1-2.25. This guard keeps DATA drift from being mislabeled as
-        # RELATIONAL drift while still allowing BOTH episodes to be detected.
-        relational_candidate = (
-            fired
-            and mean_resid >= RELATIONAL_MEAN_THRESHOLD
-        )
-        rel_alarm = relational_candidate and not self.relational_on
+        rel_alarm = fired and not self.relational_on
 
-        if relational_candidate:
+        if fired:
             self.relational_on = True
 
         elif (
             self.relational_on
-            and mean_resid < RULE_BACK
+            and resid.mean() < RULE_BACK
         ):
             self.relational_on = False
             self.ph.reset()
@@ -505,12 +490,6 @@ class SGDStreamEngine:
         # Treat one contiguous drift episode as one alarm episode. A second
         # detector signal while the same episode is still active is retained
         # in the diagnostics but is not emitted as another NEW alarm.
-        drift_active = diagnosis != "none"
-
-        # One NEW alarm per contiguous drift episode. A later transition from
-        # DATA -> BOTH (or RELATIONAL -> BOTH) is retained in the diagnosis
-        # and in the type-specific transition flags, but does not create a
-        # second episode-level alarm.
         alarm_candidate = data_alarm or rel_alarm
         alarm = alarm_candidate and not self.alarm_episode_latched
 
@@ -525,7 +504,6 @@ class SGDStreamEngine:
         if recovery:
             self.alarm_episode_latched = False
 
-        self.drift_active = drift_active
         self.prev_diag = diagnosis
 
         return {
@@ -541,14 +519,10 @@ class SGDStreamEngine:
             "data_alarm": bool(data_alarm),
             "relational_alarm": bool(rel_alarm),
             "alarm": bool(alarm),
-            "new_alarm": bool(alarm),
             "recovery": bool(recovery),
-            "drift_active": bool(drift_active),
-            "data_active": bool(raw_data),
-            "relational_active": bool(self.relational_on),
             "diagnosis": diagnosis,
             "ph_stat": float(self.ph.stat),
-            "mean_resid": mean_resid,
+            "mean_resid": float(resid.mean()),
         }
 
     def _adapt(self, Xb, yb, alarm, recovery):
@@ -598,6 +572,11 @@ class SGDStreamEngine:
             "start": int(s),
             "end": int(e),
             "strategy": self.strategy,
+            # Per-observation test predictions are exposed for the UI only.
+            # The live detector/adaptation logic above does not use these UI fields.
+            "timestamps": [str(v) for v in self.df["timestamp"].iloc[idx].tolist()],
+            "y_true": self.yraw[idx].astype(float).tolist(),
+            "y_pred": np.asarray(pred, dtype=float).tolist(),
             **metric,
             "mae_x_normal": float(
                 metric["mae"] / self.reference_mae
@@ -607,10 +586,6 @@ class SGDStreamEngine:
             "recovery": det["recovery"],
             "data_alarm": det["data_alarm"],
             "relational_alarm": det["relational_alarm"],
-            "new_alarm": det["new_alarm"],
-            "drift_active": det["drift_active"],
-            "data_active": det["data_active"],
-            "relational_active": det["relational_active"],
             "adapted": bool(adapted),
             "ph_stat": det["ph_stat"],
             "mean_resid": det["mean_resid"],
