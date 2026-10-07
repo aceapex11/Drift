@@ -1,0 +1,13 @@
+window,start,end,event,diagnosis,drift_active,data_active,relational_active,data_alarm,relational_alarm,alarm,adapted,recovery,true_data_drift,true_concept_drift
+7,18600,19200,detected_drift,data,True,True,False,True,False,True,True,False,True,False
+11,21000,21600,recovery,none,False,False,False,False,False,False,False,True,False,False
+18,25200,25800,detected_drift,relational,True,False,True,False,True,True,True,False,False,True
+25,29400,30000,recovery,none,False,False,False,False,False,False,False,True,False,False
+33,34200,34800,detected_drift,both,True,True,True,True,True,True,True,False,True,True
+38,37200,37800,recovery,none,False,False,False,False,False,False,False,True,False,False
+42,39600,40200,detected_drift,relational,True,False,True,False,True,True,True,False,False,True
+47,42600,43200,recovery,none,False,False,False,False,False,False,False,True,False,False
+52,45600,46200,detected_drift,data,True,True,False,True,False,True,True,False,True,False
+61,51000,51600,recovery,none,False,False,False,False,False,False,False,True,False,False
+64,52800,53400,detected_drift,relational,True,False,True,False,True,True,True,False,True,True
+65,53400,54000,data_drift_detected,both,True,True,True,True,False,False,True,False,True,True

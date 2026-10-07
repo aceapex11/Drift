@@ -1,0 +1,4 @@
+true_type,Episodes,Correct,Type_Accuracy,Alarm_Detected
+both,10,10,1.0,10
+data,10,10,1.0,10
+relational,10,10,1.0,10
