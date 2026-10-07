@@ -16,7 +16,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from data_generator import generate, TRAIN_END, WINDOW
+from data_generator import FEATURES, TARGET, generate, TRAIN_END, WINDOW
 from drift_engine import StrategyRunner
 
 
@@ -247,6 +247,7 @@ for key, default in {
     "stream_index": 0,
     "stream_running": False,
     "stream_finished": False,
+    "prediction_history": [],
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
@@ -299,6 +300,200 @@ def current_best_model():
     best = min(rows.items(), key=lambda item: float(item[1]["mae"]))
     return STRATEGY_LABELS[best[0]], float(best[1]["mae"])
 
+
+
+def prediction_df():
+    """Flatten stored test-window predictions for the target timeline."""
+    records = st.session_state.get("prediction_history", [])
+    if not records:
+        return pd.DataFrame()
+
+    rows = []
+    for rec in records:
+        timestamps = rec.get("timestamps", [])
+        actual = rec.get("actual", [])
+        predicted = rec.get("predicted", [])
+        n = min(len(timestamps), len(actual), len(predicted))
+        for j in range(n):
+            rows.append({
+                "timestamp": timestamps[j],
+                "window": rec["window"],
+                "strategy": rec["strategy"],
+                "actual": actual[j],
+                "predicted": predicted[j],
+            })
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows)
+
+
+def add_drift_regions(fig, inc_history):
+    """Shade detector-diagnosed drift windows; never uses ground truth."""
+    if inc_history is None or inc_history.empty or "diagnosis" not in inc_history.columns:
+        return fig
+
+    colors = {
+        "data": "rgba(2,132,199,0.10)",
+        "relational": "rgba(124,58,237,0.10)",
+        "both": "rgba(220,38,38,0.10)",
+    }
+    labels = {"data": "Detected data drift", "relational": "Detected relational drift", "both": "Detected both"}
+
+    added = set()
+    for _, r in inc_history.sort_values("window").iterrows():
+        diagnosis = str(r.get("diagnosis", "none")).lower()
+        if diagnosis not in colors:
+            continue
+        start = int(r.get("start", 0))
+        end = int(r.get("end", start + WINDOW))
+        if end <= start:
+            continue
+        fig.add_vrect(
+            x0=start,
+            x1=end,
+            fillcolor=colors[diagnosis],
+            line_width=0,
+            layer="below",
+            name=labels[diagnosis] if diagnosis not in added else None,
+        )
+        added.add(diagnosis)
+
+    return fig
+
+
+def add_time_drift_regions(fig, inc_history, x_column="timestamp"):
+    """Shade drift regions on timestamp charts using detector diagnosis."""
+    if inc_history is None or inc_history.empty or "diagnosis" not in inc_history.columns:
+        return fig
+
+    colors = {
+        "data": "rgba(2,132,199,0.09)",
+        "relational": "rgba(124,58,237,0.09)",
+        "both": "rgba(220,38,38,0.10)",
+    }
+    labels = {"data": "Detected data drift", "relational": "Detected relational drift", "both": "Detected both"}
+    added = set()
+
+    for _, r in inc_history.sort_values("window").iterrows():
+        diagnosis = str(r.get("diagnosis", "none")).lower()
+        if diagnosis not in colors:
+            continue
+        start = r.get("timestamp_start")
+        end = r.get("timestamp_end")
+        if pd.isna(start) or pd.isna(end):
+            continue
+        fig.add_vrect(
+            x0=start,
+            x1=end,
+            fillcolor=colors[diagnosis],
+            line_width=0,
+            layer="below",
+            name=labels[diagnosis] if diagnosis not in added else None,
+        )
+        added.add(diagnosis)
+    return fig
+
+
+def add_prediction_event_lines(fig, inc_history):
+    """Add adaptation lines and compact detector event markers to time charts."""
+    if inc_history is None or inc_history.empty:
+        return fig
+
+    added = set()
+    for _, r in inc_history.sort_values("window").iterrows():
+        ts = r.get("timestamp_end")
+        if pd.isna(ts):
+            continue
+        if bool(r.get("alarm", False)):
+            if "alarm" not in added:
+                fig.add_trace(go.Scatter(
+                    x=[None], y=[None], mode="lines", name="New drift alarm",
+                    line=dict(color=COLORS["alarm"], width=2, dash="solid"),
+                ))
+                added.add("alarm")
+            fig.add_vline(x=ts, line_color=COLORS["alarm"], line_width=1.3, opacity=0.8)
+        if bool(r.get("adapted", False)):
+            if "adapt" not in added:
+                fig.add_trace(go.Scatter(
+                    x=[None], y=[None], mode="lines", name="Adaptation",
+                    line=dict(color=COLORS["adapt"], width=2, dash="dot"),
+                ))
+                added.add("adapt")
+            fig.add_vline(x=ts, line_color=COLORS["adapt"], line_dash="dot", line_width=1.2, opacity=0.8)
+    return fig
+
+
+def feature_timestamp_history(df, end_row):
+    if df is None or df.empty:
+        return pd.DataFrame()
+    end_row = max(0, min(int(end_row), len(df)))
+    cols = ["timestamp"] + [c for c in FEATURES if c in df.columns]
+    return df.iloc[:end_row][cols].copy()
+
+
+def plot_feature_timeline(df, inc_history, feature, height=390):
+    fig = go.Figure()
+    if df is None or df.empty or feature not in df.columns:
+        return base_fig("Feature timeline", feature, height)
+
+    end_row = int(inc_history["end"].max()) if inc_history is not None and not inc_history.empty and "end" in inc_history.columns else len(df)
+    d = feature_timestamp_history(df, end_row)
+    fig.add_trace(go.Scatter(
+        x=d["timestamp"], y=d[feature], mode="lines", name=feature,
+        line=dict(color=COLORS["data"], width=1.8),
+        hovertemplate="Time %{x}<br>" + feature + ": %{y:.3f}<extra></extra>",
+    ))
+    add_time_drift_regions(fig, inc_history)
+    add_prediction_event_lines(fig, inc_history)
+    fig.update_layout(
+        title=dict(text=f"Feature timeline — {feature}", x=0.01, xanchor="left", font=dict(size=16)),
+        template="plotly_white", paper_bgcolor=COLORS["panel"], plot_bgcolor=COLORS["panel"],
+        font=dict(color=COLORS["text"]), height=height,
+        margin=dict(l=48, r=28, t=58, b=42), hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=10)),
+        xaxis=dict(title="Time", gridcolor=COLORS["grid"], zeroline=False),
+        yaxis=dict(title=feature, gridcolor=COLORS["grid"], zeroline=False),
+    )
+    return fig
+
+
+def plot_target_models(inc_history, height=430):
+    fig = go.Figure()
+    p = prediction_df()
+    if p.empty:
+        fig.update_layout(title="Target timeline — actual vs all models")
+        return fig
+
+    for strategy in STRATEGIES:
+        h = p[p["strategy"] == strategy]
+        if h.empty:
+            continue
+        fig.add_trace(go.Scatter(
+            x=h["timestamp"], y=h["predicted"], mode="lines",
+            name=STRATEGY_LABELS[strategy],
+            line=dict(color=STRATEGY_COLORS[strategy], width=1.7 if strategy != "Incremental" else 2.4),
+            opacity=0.88,
+        ))
+
+    # Actual target is identical for all strategies, so draw it once on top.
+    actual = p[["timestamp", "actual"]].drop_duplicates("timestamp").sort_values("timestamp")
+    fig.add_trace(go.Scatter(
+        x=actual["timestamp"], y=actual["actual"], mode="lines", name="Actual target",
+        line=dict(color=COLORS["text"], width=2.4),
+    ))
+
+    add_time_drift_regions(fig, inc_history)
+    add_prediction_event_lines(fig, inc_history)
+    fig.update_layout(
+        title=dict(text="Target timeline — actual vs all models", x=0.01, xanchor="left", font=dict(size=16)),
+        template="plotly_white", paper_bgcolor=COLORS["panel"], plot_bgcolor=COLORS["panel"],
+        font=dict(color=COLORS["text"]), height=height,
+        margin=dict(l=48, r=28, t=58, b=42), hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=10)),
+        xaxis=dict(title="Time", gridcolor=COLORS["grid"], zeroline=False),
+        yaxis=dict(title=TARGET, gridcolor=COLORS["grid"], zeroline=False),
+    )
+    return fig
 
 def add_event_lines(fig, events):
     seen = set()
@@ -517,6 +712,7 @@ if start:
     st.session_state.stream_index = 0
     st.session_state.stream_running = True
     st.session_state.stream_finished = False
+    st.session_state.prediction_history = []
     st.session_state.stream_df = load_data()
     st.session_state.live_runner = StrategyRunner(
         st.session_state.stream_df,
@@ -591,6 +787,34 @@ with tab_dashboard:
         )
 
         inc_hist = strategy_history("Incremental")
+
+        st.markdown('<div class="section-title">Feature timeline</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="section-note">Select any machine column. Blue/purple/red background shows detected data / relational / both drift; teal markers show adaptation.</div>',
+            unsafe_allow_html=True,
+        )
+        feature = st.selectbox(
+            "Feature column",
+            list(FEATURES),
+            key="feature_column",
+            label_visibility="collapsed",
+        )
+        st.plotly_chart(
+            plot_feature_timeline(st.session_state.stream_df, inc_hist, feature),
+            width="stretch",
+            key=f"feature_{feature}_{len(all_history)}",
+        )
+
+        st.markdown('<div class="section-title">Target timeline — actual vs all models</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="section-note">Actual target plus every live learning strategy. The same detected drift and adaptation markers are overlaid.</div>',
+            unsafe_allow_html=True,
+        )
+        st.plotly_chart(
+            plot_target_models(inc_hist),
+            width="stretch",
+            key=f"target_models_{len(all_history)}",
+        )
         if not inc_hist.empty:
             a, b, c = st.columns(3)
             a.metric("DRIFT ALARMS", int(inc_hist["alarm"].astype(bool).sum()))
@@ -731,6 +955,22 @@ if st.session_state.stream_running:
         for strategy, row in batch.items():
             saved = dict(row)
             saved["strategy"] = strategy
+
+            # Keep per-observation predictions separate from the compact KPI history.
+            # This lets the target chart show actual values + every model over time.
+            timestamps = list(data["timestamp"].iloc[s:e])
+            st.session_state.prediction_history.append({
+                "window": int(row["window"]),
+                "strategy": strategy,
+                "timestamps": timestamps,
+                "actual": list(row.get("y_true", [])),
+                "predicted": list(row.get("y_pred", [])),
+            })
+            saved.pop("y_true", None)
+            saved.pop("y_pred", None)
+            saved.pop("timestamps", None)
+            saved["timestamp_start"] = timestamps[0] if timestamps else pd.NaT
+            saved["timestamp_end"] = timestamps[-1] if timestamps else pd.NaT
             st.session_state.history.append(saved)
 
         primary = batch["Incremental"]
