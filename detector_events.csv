@@ -1,7 +1,0 @@
-window,start,end,event,diagnosis,data_alarm,relational_alarm,adapted,true_data_drift,true_concept_drift
-6,18000,18600,detected_drift,relational,False,True,True,True,False
-18,25200,25800,detected_drift,relational,False,True,True,False,True
-31,33000,33600,detected_drift,relational,False,True,True,True,True
-42,39600,40200,detected_drift,relational,False,True,True,False,True
-52,45600,46200,detected_drift,data,True,False,True,True,False
-64,52800,53400,detected_drift,relational,False,True,True,True,True
